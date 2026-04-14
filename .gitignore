@@ -1,0 +1,48 @@
+/.phpunit.cache
+/bootstrap/ssr
+/node_modules
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/storage/logs/*
+!/storage/logs/.gitkeep
+/resources/js/actions
+/resources/js/routes
+/resources/js/wayfinder
+/vendor
+.DS_Store
+.env
+.env.backup
+.env.production
+.phpactor.json
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+npm-debug.log
+yarn-error.log
+/auth.json
+/.fleet
+/.idea
+/.nova
+/.vscode
+/.zed
+/.claude
+
+# SQLite database — each developer creates their own via: php artisan migrate
+/database/*.sqlite
+/database/*.sqlite-shm
+/database/*.sqlite-wal
+
+# User-generated audio files — not part of the codebase
+/storage/app/public/audio/*
+!/storage/app/public/audio/.gitkeep
+
+# Voice preview samples — regenerated via: php artisan voices:refresh
+/storage/app/public/voice-samples/*
+!/storage/app/public/voice-samples/.gitkeep
+
+# General storage uploads
+/storage/app/private/*
+!/storage/app/private/.gitkeep
