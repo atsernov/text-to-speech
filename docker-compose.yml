@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:80"
+    volumes:
+      # SQLite database — stored on host disk, survives container restarts
+      - ./database:/app/database
+      # Generated audio files and voice samples — same reason
+      - ./storage/app/public:/app/storage/app/public
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://localhost:8080
+    restart: unless-stopped

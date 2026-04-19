@@ -1,0 +1,24 @@
+# Dependencies (installed inside Docker)
+node_modules/
+vendor/
+
+# Environment (never goes into the image)
+.env
+
+# Git
+.git/
+.gitignore
+
+# Generated audio and voice samples (mounted as volumes)
+storage/app/public/audio/*
+storage/app/public/voice-samples/*
+
+# Logs
+storage/logs/*
+
+# Database (mounted as volume)
+database/*.sqlite
+
+# Dev tools
+.claude/
+*.md

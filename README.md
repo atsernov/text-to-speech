@@ -10,27 +10,20 @@ Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
 - Text-to-speech synthesis with selectable voice and playback speed
 - Long text support — automatically split into chunks and merged back
 - File upload (`.txt`, `.docx`) and URL-to-text extraction
-- Session-based audio history (no registration required)
-- Voice preview samples generated daily
+- Session-based audio history with progress tracking (no registration required)
+- Audio files automatically deleted after **30 days**; days remaining shown in history
+- Voice preview samples refreshed daily
 - Admin panel for monitoring jobs and managing audio files
+- Docker support for easy deployment
 
 ---
 
-## Requirements
+## Running with Docker
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| PHP | 8.3+ | With extensions: `sqlite3`, `pdo_sqlite`, `zip`, `mbstring`, `curl`, `fileinfo` |
-| Composer | 2.x | [getcomposer.org](https://getcomposer.org) |
-| Node.js | 20+ | [nodejs.org](https://nodejs.org) |
-| npm | 10+ | Comes with Node.js |
-| SQLite | 3.x | Usually pre-installed; on Linux: `apt install sqlite3` |
+### Requirements
 
-> **No MySQL, Redis, or ffmpeg required.** Everything runs on SQLite and PHP.
-
----
-
-## Installation
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS)
+- Or `docker` + `docker-compose-plugin` (Linux)
 
 ### 1. Clone the repository
 
@@ -39,10 +32,98 @@ git clone <repository-url>
 cd text-to-speech
 ```
 
-### 2. Install PHP dependencies
+### 2. Create the environment file
+
+```bash
+# Linux / macOS
+cp .env.example .env
+
+# Windows (PowerShell)
+Copy-Item .env.example .env
+```
+
+### 3. Fill in the required values in `.env`
+
+```env
+APP_KEY=        # generate with: php artisan key:generate --show
+APP_URL=
+```
+
+Generate the key (requires PHP locally, or skip to step 4 and generate inside Docker):
+
+```bash
+php artisan key:generate --show
+# Copy the output (base64:...) into APP_KEY=
+```
+
+### 4. Build and start
+
+```bash
+docker-compose up --build -d
+```
+
+On the **first run** the container automatically:
+- Runs database migrations
+- Downloads and generates voice preview samples (~1–2 min)
+
+### 6. Create the admin user
+
+```bash
+docker-compose exec app php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
+```
+
+The app is available at **http://localhost:8080**.  
+The admin panel is at **http://localhost:8080/admin**.
+
+### Common Docker commands
+
+```bash
+# Start in background
+docker-compose up -d
+
+# Stop
+docker-compose down
+
+# View live logs
+docker-compose logs -f
+
+# Rebuild after code changes
+docker-compose up --build -d
+
+# Open a shell inside the container
+docker-compose exec app bash
+
+# Run artisan commands inside the container
+docker-compose exec app php artisan <command>
+```
+
+---
+
+## Running locally
+
+### Requirements
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| PHP | 8.4+ | Extensions: `sqlite3`, `pdo_sqlite`, `zip`, `mbstring`, `xml`, `intl`, `curl`, `fileinfo` |
+| Composer | 2.x | [getcomposer.org](https://getcomposer.org) |
+| Node.js | 20+ | [nodejs.org](https://nodejs.org) |
+| npm | 10+ | Comes with Node.js |
+
+> **No MySQL, Redis, or ffmpeg required.** Everything runs on SQLite and PHP.
+
+### 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd text-to-speech
+```
+
+### 2. Install dependencies
 
 ```bash
 composer install
+npm install
 ```
 
 ### 3. Create the environment file
@@ -50,9 +131,6 @@ composer install
 ```bash
 # Linux / macOS
 cp .env.example .env
-
-# Windows (Command Prompt)
-copy .env.example .env
 
 # Windows (PowerShell)
 Copy-Item .env.example .env
@@ -70,72 +148,60 @@ php artisan key:generate
 php artisan migrate
 ```
 
-> Laravel automatically creates the `database/database.sqlite` file if it does not exist yet.
+> Laravel automatically creates `database/database.sqlite` if it does not exist.
 
-### 7. Install Node.js dependencies
-
-```bash
-npm install
-```
-
-### 8. Create the public storage symlink
+### 6. Create the public storage symlink
 
 ```bash
 php artisan storage:link
 ```
 
-### 9. Generate voice samples
+### 7. Generate voice samples
 
-This command fetches all available voices from the TartuNLP API, generates a short audio sample for each, and removes any non-functional voices from the list.  
+Fetches all available voices from the TartuNLP API and generates a short audio preview for each.  
 **Requires an internet connection. Takes ~1–2 minutes.**
 
 ```bash
 php artisan voices:refresh
 ```
 
-### 10. Create an admin user
+### 8. Create an admin user
 
 ```bash
-php artisan admin:create
+php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
 ```
 
-Enter the email, name, and password when prompted.  
 If the user already exists, they will be promoted to admin without changing their password.
 
----
+### 9. Start the development servers
 
-## Running locally
+You need **three processes** running simultaneously. The easiest way:
 
-You need **three processes** running simultaneously. Open three separate terminal windows:
-
-### Terminal 1 — Laravel development server
 ```bash
-php artisan serve
+composer run dev
 ```
 
-### Terminal 2 — Queue worker (background job processing)
-```bash
-php artisan queue:work --tries=1
-```
+Or manually in three separate terminals:
 
-### Terminal 3 — Vite (frontend asset compiler)
 ```bash
-npm run dev
+php artisan serve          # Terminal 1 — Laravel server
+php artisan queue:work --tries=1  # Terminal 2 — Queue worker
+npm run dev                # Terminal 3 — Vite (frontend)
 ```
 
 The app will be available at **http://localhost:8000**.  
 The admin panel is at **http://localhost:8000/admin**.
 
-> **Tip:** You can run all three in a single terminal using the built-in shortcut:
-> ```bash
-> composer run dev
-> ```
-
 ---
 
-## Scheduler (voice list auto-update)
+## Scheduler (automatic daily tasks)
 
-The voice list is refreshed every day at 3:00 AM via the Laravel Scheduler.
+Two tasks run daily via the Laravel Scheduler:
+
+| Time | Command | Description |
+|------|---------|-------------|
+| 03:00 | `voices:refresh` | Refresh voice list and preview samples |
+| 04:00 | `audio:cleanup` | Delete audio files and records older than 30 days |
 
 ### Linux / macOS — add one cron entry
 
@@ -143,39 +209,49 @@ The voice list is refreshed every day at 3:00 AM via the Laravel Scheduler.
 crontab -e
 ```
 
-Add this line (adjust the path to your project):
+Add this line (adjust the path):
 
 ```
 * * * * * cd /path/to/text-to-speech && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-### Windows
+> **Docker:** The scheduler runs automatically inside the container — no cron setup needed.
 
-On Windows the simplest approach for development is to run the refresh manually when needed:
+### Windows (development)
+
+Run commands manually when needed:
 
 ```bash
 php artisan voices:refresh
+php artisan audio:cleanup
 ```
 
-For a production Windows server, use Windows Task Scheduler to run `php artisan schedule:run` every minute.
+---
+
+## Audio file retention
+
+Generated audio files are automatically deleted **30 days** after creation.
+
+- The days remaining are shown in the user's history sidebar
+- The admin panel displays the expiry for each file
+- Deletion runs daily at 04:00 via the scheduler (or `php artisan audio:cleanup`)
 
 ---
 
 ## Environment variables
 
-The most important variables in `.env`:
+Key variables in `.env`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `APP_KEY` | *(empty)* | Required — generate with `php artisan key:generate` |
 | `APP_URL` | `http://localhost` | Base URL — affects generated audio links |
 | `APP_ENV` | `local` | Set to `production` on a live server |
 | `APP_DEBUG` | `true` | Set to `false` in production |
 | `DB_CONNECTION` | `sqlite` | Database driver |
-| `QUEUE_CONNECTION` | `database` | Queue driver (uses the SQLite DB) |
-| `CACHE_STORE` | `database` | Cache driver (uses the SQLite DB) |
+| `QUEUE_CONNECTION` | `database` | Queue driver |
+| `CACHE_STORE` | `database` | Cache driver |
 | `SESSION_DRIVER` | `database` | Session driver |
-
-No changes to `.env` are required to run the project locally with the default settings.
 
 ---
 
@@ -184,6 +260,7 @@ No changes to `.env` are required to run the project locally with the default se
 ```
 app/
 ├── Console/Commands/
+│   ├── CleanupAudioFiles.php     # php artisan audio:cleanup
 │   ├── CreateAdminUser.php       # php artisan admin:create
 │   └── RefreshVoiceSamples.php   # php artisan voices:refresh
 ├── Http/Controllers/
@@ -195,7 +272,7 @@ app/
 ├── Jobs/
 │   └── SynthesizeLongTextJob.php
 ├── Models/
-│   ├── AudioFile.php
+│   ├── AudioFile.php             # RETENTION_DAYS = 30
 │   ├── User.php
 │   └── VoiceSample.php
 └── Services/
@@ -204,16 +281,20 @@ app/
     ├── UrlTextExtractorService.php
     └── WavMergerService.php
 
+docker/
+├── nginx.conf                    # Nginx web server config
+└── supervisord.conf              # Process manager (nginx + php-fpm + queue + scheduler)
+
 resources/js/pages/
-├── Index.vue           # Main TTS page
+├── Index.vue                     # Main TTS page
 └── admin/
-    ├── Dashboard.vue   # Admin — stats overview
-    ├── Files.vue       # Admin — all audio files
-    └── Jobs.vue        # Admin — active queue jobs
+    ├── Dashboard.vue             # Admin — stats overview
+    ├── Files.vue                 # Admin — all audio files (with expiry)
+    └── Jobs.vue                  # Admin — active queue jobs
 
 storage/app/public/
-├── audio/              # Generated user audio files
-└── voice-samples/      # Voice preview samples
+├── audio/                        # Generated user audio files (deleted after 30 days)
+└── voice-samples/                # Voice preview samples (refreshed daily)
 ```
 
 ---
@@ -222,10 +303,13 @@ storage/app/public/
 
 ```bash
 # Create or promote an admin user
-php artisan admin:create
+php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
 
 # Refresh the voice list and regenerate preview samples
 php artisan voices:refresh
+
+# Delete audio files and records older than 30 days
+php artisan audio:cleanup
 
 # Process queued jobs (runs until stopped with Ctrl+C)
 php artisan queue:work --tries=1
@@ -245,29 +329,40 @@ php artisan optimize:clear
 Make sure the storage symlink exists:
 ```bash
 php artisan storage:link
+# or inside Docker:
+docker-compose exec app php artisan storage:link
 ```
 
 **Queue jobs are stuck as "pending"**  
-The queue worker must be running:
+The queue worker must be running. In Docker it starts automatically.  
+Locally:
 ```bash
 php artisan queue:work --tries=1
 ```
-After changing job code, always restart the worker:
+After changing job code, restart the worker:
 ```bash
 php artisan queue:restart
 ```
 
 **"Unable to locate file in Vite manifest"**  
-The Vite dev server is not running:
+The frontend assets have not been compiled:
 ```bash
-npm run dev
+npm run dev   # development
+npm run build # production
 ```
 
 **SSL certificate errors on Windows**  
-PHP on Windows sometimes cannot verify SSL certificates. This is already handled in the codebase with `->withoutVerifying()` on all external HTTP calls.
+Already handled in the codebase with `->withoutVerifying()` on all external HTTP calls.
 
 **Voice list is empty on the main page**  
-Run the voice refresh command:
 ```bash
 php artisan voices:refresh
+# or inside Docker:
+docker-compose exec app php artisan voices:refresh
+```
+
+**Container fails to start**  
+Check the logs:
+```bash
+docker-compose logs app
 ```
