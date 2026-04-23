@@ -11,6 +11,7 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::post('/extract-text', [TextExtractorController::class, 'extract'])->name('text.extract');
+Route::post('/extract-pdf', [TextExtractorController::class, 'extractPdf'])->name('pdf.extract');
 
 Route::post('/extract-url', [UrlExtractorController::class, 'extract'])->name('url.extract');
 

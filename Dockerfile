@@ -53,6 +53,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libonig-dev \
         curl \
         unzip \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-est \
     && docker-php-ext-install \
         pdo_sqlite \
         zip \
@@ -97,6 +100,9 @@ RUN mkdir -p \
 # Set correct ownership and permissions
 RUN chown -R www-data:www-data /app \
     && chmod -R 755 storage bootstrap/cache
+
+# Copy PHP configuration
+COPY docker/php.ini /usr/local/etc/php/conf.d/custom.ini
 
 # Copy nginx config
 COPY docker/nginx.conf /etc/nginx/conf.d/app.conf

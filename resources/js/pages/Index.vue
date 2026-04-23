@@ -63,13 +63,151 @@ const uploadedFileName = ref<string | null>(null);
 const isFileLoading = ref(false);
 const isDraggingOver = ref(false);
 
+const pdfAbortController = ref<AbortController | null>(null);
+const pdfStreamProgress = ref<{ page: number; total: number } | null>(null);
+
 const openFilePicker = () => fileInputRef.value?.click();
+
+const stopPdfStream = () => {
+    pdfAbortController.value?.abort();
+    pdfAbortController.value = null;
+    pdfStreamProgress.value = null;
+    isFileLoading.value = false;
+};
+
+const uploadPdfStreaming = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const controller = new AbortController();
+    pdfAbortController.value = controller;
+
+    const csrfToken =
+        document
+            .querySelector('meta[name="csrf-token"]')
+            ?.getAttribute('content') ?? '';
+
+    let response: Response;
+
+    try {
+        response = await fetch('/api/extract-pdf', {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+            headers: { 'X-CSRF-TOKEN': csrfToken },
+        });
+    } catch (err: any) {
+        if (err.name !== 'AbortError') {
+            errorMessage.value = 'Не удалось прочитать файл.';
+        }
+
+        isFileLoading.value = false;
+        pdfAbortController.value = null;
+
+        return;
+    }
+
+    // Text-based PDF — regular JSON response
+    if (response.headers.get('content-type')?.includes('application/json')) {
+        try {
+            const data = await response.json();
+
+            if (!response.ok) {
+                errorMessage.value = data.error ?? 'Не удалось прочитать файл.';
+                uploadedFileName.value = null;
+            } else {
+                inputText.value = data.text;
+                activePanel.value = null;
+            }
+        } catch {
+            errorMessage.value = 'Не удалось прочитать файл.';
+            uploadedFileName.value = null;
+        }
+
+        isFileLoading.value = false;
+        pdfAbortController.value = null;
+
+        return;
+    }
+
+    // Scanned PDF — SSE stream, text appears page by page
+    if (!response.body) {
+        errorMessage.value = 'Streaming is not supported by this browser.';
+        isFileLoading.value = false;
+        pdfAbortController.value = null;
+
+        return;
+    }
+
+    inputText.value = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // SSE events are separated by \n\n
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() ?? '';
+
+            for (const part of parts) {
+                const line = part.trim();
+
+                if (!line.startsWith('data: ')) {
+                    continue;
+                }
+
+                try {
+                    const event = JSON.parse(line.slice(6));
+
+                    if (event.type === 'page') {
+                        pdfStreamProgress.value = {
+                            page: event.page,
+                            total: event.total,
+                        };
+
+                        if (event.text) {
+                            inputText.value +=
+                                (inputText.value ? '\n' : '') + event.text;
+                        }
+                    } else if (event.type === 'done') {
+                        activePanel.value = null;
+                    } else if (event.type === 'error') {
+                        errorMessage.value =
+                            event.message ?? 'Не удалось прочитать файл.';
+                        uploadedFileName.value = null;
+                    }
+                } catch {
+                    // Ignore malformed SSE lines
+                }
+            }
+        }
+    } catch (err: any) {
+        if (err.name !== 'AbortError') {
+            errorMessage.value = 'Не удалось прочитать файл.';
+            uploadedFileName.value = null;
+        }
+    } finally {
+        reader.cancel();
+        isFileLoading.value = false;
+        pdfAbortController.value = null;
+        pdfStreamProgress.value = null;
+    }
+};
 
 const uploadFile = async (file: File) => {
     const ext = '.' + file.name.split('.').pop()?.toLowerCase();
 
-    if (!['.txt', '.docx'].includes(ext)) {
-        errorMessage.value = 'Lubatud failid: .txt, .docx';
+    if (!['.txt', '.docx', '.pdf'].includes(ext)) {
+        errorMessage.value = 'Lubatud failid: .txt, .docx, .pdf';
 
         return;
     }
@@ -77,6 +215,13 @@ const uploadFile = async (file: File) => {
     uploadedFileName.value = file.name;
     isFileLoading.value = true;
     errorMessage.value = '';
+
+    if (ext === '.pdf') {
+        await uploadPdfStreaming(file);
+
+        return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
 
@@ -351,6 +496,7 @@ onUnmounted(() => {
     stopPolling();
     stopHistoryPolling();
     stopPreview();
+    stopPdfStream();
 });
 </script>
 
@@ -761,7 +907,7 @@ onUnmounted(() => {
                 <input
                     ref="fileInputRef"
                     type="file"
-                    accept=".txt,.docx"
+                    accept=".txt,.docx,.pdf"
                     class="hidden"
                     @change="onFileSelected"
                 />
@@ -779,7 +925,33 @@ onUnmounted(() => {
                     @dragleave="onDragLeave"
                     @drop="onDrop"
                 >
-                    <span v-if="isFileLoading">Laen faili...</span>
+                    <template v-if="pdfStreamProgress">
+                        <svg
+                            class="h-4 w-4 animate-spin text-primary"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                        >
+                            <circle
+                                class="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                stroke-width="4"
+                            />
+                            <path
+                                class="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                            />
+                        </svg>
+                        <span>
+                            Loen lehte {{ pdfStreamProgress.page }} /
+                            {{ pdfStreamProgress.total }}
+                        </span>
+                    </template>
+                    <span v-else-if="isFileLoading">Laen faili...</span>
                     <template v-else-if="isDraggingOver">
                         <span class="text-2xl">📂</span>
                         <span>Lase lahti</span>
@@ -788,10 +960,30 @@ onUnmounted(() => {
                         <span class="text-2xl">📄</span>
                         <span>{{
                             uploadedFileName ??
-                            'Klõpsa või lohista .txt / .docx'
+                            'Klõpsa või lohista .txt / .docx / .pdf'
                         }}</span>
                     </template>
                 </button>
+
+                <div v-if="pdfStreamProgress" class="mt-2 space-y-1.5">
+                    <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                            class="h-full rounded-full bg-primary transition-all duration-500"
+                            :style="{
+                                width: `${(pdfStreamProgress.page / pdfStreamProgress.total) * 100}%`,
+                            }"
+                        />
+                    </div>
+                    <div class="flex justify-end">
+                        <button
+                            type="button"
+                            class="text-xs text-muted-foreground underline hover:text-destructive"
+                            @click.stop="stopPdfStream"
+                        >
+                            Peata lugemine
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <div
