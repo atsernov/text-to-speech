@@ -3,6 +3,7 @@ import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { useAppearance } from '@/composables/useAppearance';
+import PlainTextEditor from '@/components/PlainTextEditor.vue';
 
 const props = defineProps<{
     speakers:
@@ -51,7 +52,7 @@ const extractFromUrl = async () => {
         activePanel.value = null;
     } catch (error: any) {
         errorMessage.value =
-            error.response?.data?.error ?? 'Не удалось загрузить страницу.';
+            error.response?.data?.error ?? 'Lehe laadimine ebaõnnestus.';
     } finally {
         isUrlLoading.value = false;
     }
@@ -65,6 +66,7 @@ const isDraggingOver = ref(false);
 
 const pdfAbortController = ref<AbortController | null>(null);
 const pdfStreamProgress = ref<{ page: number; total: number } | null>(null);
+const isEditorExpanded = ref(false);
 
 const openFilePicker = () => fileInputRef.value?.click();
 
@@ -98,7 +100,7 @@ const uploadPdfStreaming = async (file: File) => {
         });
     } catch (err: any) {
         if (err.name !== 'AbortError') {
-            errorMessage.value = 'Не удалось прочитать файл.';
+            errorMessage.value = 'Faili lugemine ebaõnnestus.';
         }
 
         isFileLoading.value = false;
@@ -113,14 +115,14 @@ const uploadPdfStreaming = async (file: File) => {
             const data = await response.json();
 
             if (!response.ok) {
-                errorMessage.value = data.error ?? 'Не удалось прочитать файл.';
+                errorMessage.value = data.error ?? 'Faili lugemine ebaõnnestus.';
                 uploadedFileName.value = null;
             } else {
                 inputText.value = data.text;
                 activePanel.value = null;
             }
         } catch {
-            errorMessage.value = 'Не удалось прочитать файл.';
+            errorMessage.value = 'Faili lugemine ebaõnnestus.';
             uploadedFileName.value = null;
         }
 
@@ -132,7 +134,7 @@ const uploadPdfStreaming = async (file: File) => {
 
     // Scanned PDF — SSE stream, text appears page by page
     if (!response.body) {
-        errorMessage.value = 'Streaming is not supported by this browser.';
+        errorMessage.value = 'Voogedastus ei ole selles brauseris toetatud.';
         isFileLoading.value = false;
         pdfAbortController.value = null;
 
@@ -182,7 +184,7 @@ const uploadPdfStreaming = async (file: File) => {
                         activePanel.value = null;
                     } else if (event.type === 'error') {
                         errorMessage.value =
-                            event.message ?? 'Не удалось прочитать файл.';
+                            event.message ?? 'Faili lugemine ebaõnnestus.';
                         uploadedFileName.value = null;
                     }
                 } catch {
@@ -192,7 +194,7 @@ const uploadPdfStreaming = async (file: File) => {
         }
     } catch (err: any) {
         if (err.name !== 'AbortError') {
-            errorMessage.value = 'Не удалось прочитать файл.';
+            errorMessage.value = 'Faili lugemine ebaõnnestus.';
             uploadedFileName.value = null;
         }
     } finally {
@@ -233,7 +235,7 @@ const uploadFile = async (file: File) => {
         activePanel.value = null;
     } catch (error: any) {
         errorMessage.value =
-            error.response?.data?.error ?? 'Не удалось прочитать файл.';
+            error.response?.data?.error ?? 'Faili lugemine ebaõnnestus.';
         uploadedFileName.value = null;
     } finally {
         isFileLoading.value = false;
@@ -344,7 +346,7 @@ const sendText = async () => {
         await loadHistory();
         pollingTimeout = setTimeout(() => pollStatus(data.job_id), 2000);
     } catch {
-        errorMessage.value = 'Не удалось отправить запрос на сервер.';
+        errorMessage.value = 'Serveri ühendus ebaõnnestus.';
         isLoading.value = false;
         jobStatus.value = 'idle';
     }
@@ -488,11 +490,27 @@ const togglePreview = () => {
 // Stop the preview when the selected voice changes
 watch(selectedSpeaker, stopPreview);
 
+const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && isEditorExpanded.value) {
+        isEditorExpanded.value = false;
+    }
+};
+
+const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (pdfAbortController.value !== null) {
+        e.preventDefault();
+    }
+};
+
 onMounted(() => {
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('beforeunload', onBeforeUnload);
     loadHistory();
 });
 
 onUnmounted(() => {
+    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener('beforeunload', onBeforeUnload);
     stopPolling();
     stopHistoryPolling();
     stopPreview();
@@ -819,8 +837,8 @@ onUnmounted(() => {
                                         <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                         </svg>
-                                        <span v-if="item.expires_in_days === 0">Expires today</span>
-                                        <span v-else>{{ item.expires_in_days }}d until deletion</span>
+                                        <span v-if="item.expires_in_days === 0">Aegub täna</span>
+                                        <span v-else>{{ item.expires_in_days }} p. kustutamiseni</span>
                                     </span>
                                     <a
                                         :href="item.audio_url"
@@ -1124,14 +1142,26 @@ onUnmounted(() => {
                 </div>
             </div>
 
-            <textarea
+            <PlainTextEditor
                 v-model="inputText"
-                class="w-full resize-y rounded-md border border-input bg-background p-4 text-sm text-foreground focus:ring-2 focus:ring-ring focus:outline-none disabled:opacity-50"
-                style="min-height: 220px"
                 placeholder="Sisesta tekst siia..."
                 :disabled="isLoading"
+                :streaming="pdfAbortController !== null"
             />
-            <div class="mt-1 flex justify-end">
+            <div class="mt-1 flex items-center justify-between">
+                <button
+                    v-if="inputText.length > 0"
+                    type="button"
+                    title="Laienda redaktor (täisekraan)"
+                    class="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    @click="isEditorExpanded = true"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5" />
+                    </svg>
+                    <span>Laienda</span>
+                </button>
+                <span v-else />
                 <span
                     class="text-xs"
                     :class="
@@ -1143,6 +1173,51 @@ onUnmounted(() => {
                     {{ inputText.length.toLocaleString() }} / 100 000
                 </span>
             </div>
+
+            <!-- Full-screen editor overlay -->
+            <Teleport to="body">
+                <div
+                    v-if="isEditorExpanded"
+                    class="fixed inset-0 z-50 flex flex-col bg-background"
+                >
+                    <!-- Toolbar -->
+                    <div class="flex flex-shrink-0 items-center justify-between border-b border-border px-4 py-2">
+                        <span class="text-sm text-muted-foreground">
+                            {{ inputText.length.toLocaleString() }} märki
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                                :disabled="isLoading || !inputText.trim() || inputText.length > 100000"
+                                @click="sendText"
+                            >
+                                {{ isLoading ? 'Töötleb...' : 'Häälülekanne' }}
+                            </button>
+                            <button
+                                type="button"
+                                title="Sulge (Esc)"
+                                class="flex h-8 w-8 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                                @click="isEditorExpanded = false"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 9l6 6m0-6l-6 6M3 8V4m0 0h4M3 4l5 5m13-1V4m0 0h-4m4 0l-5 5M3 16v4m0 0h4m-4 0l5-5m13 5v-4m0 4h-4m4 0l-5-5" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Editor fills remaining height -->
+                    <div class="min-h-0 flex-1 p-4">
+                        <PlainTextEditor
+                            v-model="inputText"
+                            placeholder="Sisesta tekst siia..."
+                            :disabled="isLoading"
+                            :expanded="true"
+                        />
+                    </div>
+                </div>
+            </Teleport>
 
             <button
                 class="mt-3 w-full cursor-pointer rounded-md bg-primary py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
