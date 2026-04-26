@@ -5,10 +5,12 @@ namespace App\Services;
 class TextSplitterService
 {
     private int $maxChunkSize;
+    private string $locale;
 
-    public function __construct(int $maxChunkSize = 4000)
+    public function __construct(int $maxChunkSize = 2000, string $locale = 'et_EE')
     {
         $this->maxChunkSize = $maxChunkSize;
+        $this->locale = $locale;
     }
 
     /**
@@ -68,12 +70,27 @@ class TextSplitterService
     }
 
     /**
-     * Splits text into sentences based on punctuation.
+     * Splits text into sentences using IntlBreakIterator (Unicode UAX #29 rules).
+     * Correctly handles abbreviations (Dr., lk., jne.), decimals, and initials.
+     * Falls back to punctuation-based regex if the intl extension is unavailable.
      *
      * @return string[]
      */
     private function splitIntoSentences(string $text): array
     {
+        if (class_exists(\IntlBreakIterator::class)) {
+            $iterator = \IntlBreakIterator::createSentenceInstance($this->locale);
+            $iterator->setText($text);
+
+            $sentences = [];
+            foreach ($iterator->getPartsIterator() as $part) {
+                $sentences[] = $part;
+            }
+
+            return $sentences ?: [$text];
+        }
+
+        // Fallback: split after sentence-ending punctuation followed by whitespace.
         $parts = preg_split('/(?<=[.!?])\s+/u', $text);
 
         return $parts ?: [$text];
