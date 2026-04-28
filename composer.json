@@ -1,11 +1,14 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/vue-starter-kit",
+    "name": "kolaro/text-to-speech",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
+    "description": "Kõlaro — a web application for converting text to speech using the TartuNLP API.",
     "keywords": [
-        "laravel",
-        "framework"
+        "text-to-speech",
+        "tts",
+        "estonian",
+        "tartunlp",
+        "laravel"
     ],
     "license": "MIT",
     "require": {
