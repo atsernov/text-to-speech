@@ -43,8 +43,7 @@ class SynthesizeLongTextJob implements ShouldQueue
             $this->updateStatus('processing', 0, $total);
 
             foreach ($chunks as $index => $chunk) {
-                $response = Http::withoutVerifying()
-                    ->timeout(300)
+                $response = Http::timeout(300)
                     ->post('https://api.tartunlp.ai/text-to-speech/v2', [
                         'text' => $chunk,
                         'speaker' => $this->speaker,

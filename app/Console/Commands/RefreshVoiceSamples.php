@@ -24,8 +24,7 @@ class RefreshVoiceSamples extends Command
 
         // Fetch the current list of voices
         try {
-            $listResponse = Http::withoutVerifying()
-                ->timeout(30)
+            $listResponse = Http::timeout(30)
                 ->get('https://api.tartunlp.ai/text-to-speech/v2');
         } catch (\Exception $e) {
             $this->error('Failed to get the voice list: '.$e->getMessage());
@@ -70,8 +69,7 @@ class RefreshVoiceSamples extends Command
             $languages = $speaker['languages'] ?? [];
 
             try {
-                $audioResponse = Http::withoutVerifying()
-                    ->timeout(60)
+                $audioResponse = Http::timeout(60)
                     ->post('https://api.tartunlp.ai/text-to-speech/v2', [
                         'text' => self::TEST_PHRASE,
                         'speaker' => $name,

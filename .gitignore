@@ -5,6 +5,7 @@
 /public/hot
 /public/storage
 /storage/*.key
+/storage/cacert.pem
 /storage/pail
 /storage/logs/*
 !/storage/logs/.gitkeep

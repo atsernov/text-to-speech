@@ -34,8 +34,7 @@ class Index extends Controller
 
         // Fall back to a direct API request, without sample tracks
         try {
-            $response = Http::withoutVerifying()
-                ->timeout(10)
+            $response = Http::timeout(10)
                 ->get('https://api.tartunlp.ai/text-to-speech/v2');
 
             if (! $response->successful()) {

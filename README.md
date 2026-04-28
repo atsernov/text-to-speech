@@ -1,7 +1,9 @@
-# Text-to-Speech App
+# Kõlaro — Text-to-Speech App
 
 A web application for converting text to speech using the [TartuNLP](https://tartunlp.ai/) API.  
 Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
+
+🌐 **Live instance:** [http://kolaro.itcollege.ee/](http://kolaro.itcollege.ee/)
 
 ---
 
@@ -24,6 +26,9 @@ Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS)
 - Or `docker` + `docker-compose-plugin` (Linux)
+
+> **Windows / macOS (Docker Desktop):** use `docker-compose`.  
+> **Linux:** use `docker compose` — the Compose plugin bundled with Docker Engine.
 
 ### 1. Clone the repository
 
@@ -59,7 +64,11 @@ php artisan key:generate --show
 ### 4. Build and start
 
 ```bash
+# Windows / macOS
 docker-compose up --build -d
+
+# Linux
+docker compose up --build -d
 ```
 
 On the **first run** the container automatically:
@@ -69,7 +78,11 @@ On the **first run** the container automatically:
 ### 6. Create the admin user
 
 ```bash
+# Windows / macOS
 docker-compose exec app php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
+
+# Linux
+docker compose exec app php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
 ```
 
 The app is available at **http://localhost:8080**.  
@@ -77,24 +90,32 @@ The admin panel is at **http://localhost:8080/admin**.
 
 ### Common Docker commands
 
+On **Windows / macOS** use `docker-compose`, on **Linux** use `docker compose` (with a space).
+
 ```bash
 # Start in background
-docker-compose up -d
+docker-compose up -d          # Windows / macOS
+docker compose up -d          # Linux
 
 # Stop
-docker-compose down
+docker-compose down           # Windows / macOS
+docker compose down           # Linux
 
 # View live logs
-docker-compose logs -f
+docker-compose logs -f        # Windows / macOS
+docker compose logs -f        # Linux
 
 # Rebuild after code changes
-docker-compose up --build -d
+docker-compose up --build -d  # Windows / macOS
+docker compose up --build -d  # Linux
 
 # Open a shell inside the container
-docker-compose exec app bash
+docker-compose exec app bash  # Windows / macOS
+docker compose exec app bash  # Linux
 
 # Run artisan commands inside the container
-docker-compose exec app php artisan <command>
+docker-compose exec app php artisan <command>  # Windows / macOS
+docker compose exec app php artisan <command>  # Linux
 ```
 
 ---
@@ -329,8 +350,10 @@ php artisan optimize:clear
 Make sure the storage symlink exists:
 ```bash
 php artisan storage:link
-# or inside Docker:
+# or inside Docker (Windows / macOS):
 docker-compose exec app php artisan storage:link
+# or inside Docker (Linux):
+docker compose exec app php artisan storage:link
 ```
 
 **Queue jobs are stuck as "pending"**  
@@ -352,17 +375,24 @@ npm run build # production
 ```
 
 **SSL certificate errors on Windows**  
-Already handled in the codebase with `->withoutVerifying()` on all external HTTP calls.
+Download the Mozilla CA bundle and place it at `storage/cacert.pem`:
+```bash
+curl -o storage/cacert.pem https://curl.se/ca/cacert.pem
+```
+The app automatically uses this file when it exists. On Linux the system certificates are used.
 
 **Voice list is empty on the main page**  
 ```bash
 php artisan voices:refresh
-# or inside Docker:
+# or inside Docker (Windows / macOS):
 docker-compose exec app php artisan voices:refresh
+# or inside Docker (Linux):
+docker compose exec app php artisan voices:refresh
 ```
 
 **Container fails to start**  
 Check the logs:
 ```bash
-docker-compose logs app
+docker-compose logs app  # Windows / macOS
+docker compose logs app  # Linux
 ```
