@@ -172,14 +172,27 @@ class AudioController extends Controller
 
     /**
      * Streams an audio file with Range request support (required for seeking).
+     *
+     * Access is restricted to the session that originally created the file.
      */
-    public function stream(string $filename): StreamedResponse
+    public function stream(Request $request, string $filename): StreamedResponse
     {
         $filename = basename($filename);
         $path = storage_path('app/public/audio/'.$filename);
 
         if (! file_exists($path)) {
             abort(404);
+        }
+
+        // Verify that the requesting session owns this file.
+        $sessionId = $request->cookie(self::SESSION_COOKIE);
+
+        $ownsFile = AudioFile::where('filename', $filename)
+            ->where('session_id', $sessionId)
+            ->exists();
+
+        if (! $ownsFile) {
+            abort(403);
         }
 
         $size = filesize($path);
