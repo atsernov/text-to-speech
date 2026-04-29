@@ -2,8 +2,8 @@
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
 import { onMounted, onUnmounted, ref, watch } from 'vue';
-import { useAppearance } from '@/composables/useAppearance';
 import PlainTextEditor from '@/components/PlainTextEditor.vue';
+import { useAppearance } from '@/composables/useAppearance';
 
 const props = defineProps<{
     speakers:

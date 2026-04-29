@@ -201,8 +201,7 @@ const statusClass = (s: string) => ({
                     :class="link.active
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground'"
-                    v-html="link.label"
-                />
+                ><span v-html="link.label" /></Link>
                 <span
                     v-else
                     class="rounded-md border border-border px-3 py-1.5 text-sm opacity-40"

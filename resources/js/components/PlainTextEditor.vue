@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { Compartment, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap, placeholder as placeholderExt } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 
 const props = defineProps<{
@@ -117,12 +117,16 @@ onUnmounted(() => {
 watch(
     () => props.modelValue,
     (newValue) => {
-        if (!view || isExternalUpdate) return;
+        if (!view || isExternalUpdate) {
+return;
+}
 
         const currentValue = view.state.doc.toString();
 
         // Skip if editor already has this value (avoids redundant dispatch)
-        if (currentValue === newValue) return;
+        if (currentValue === newValue) {
+return;
+}
 
         isExternalUpdate = true;
 
