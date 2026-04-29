@@ -28,10 +28,79 @@ class UrlTextExtractorService
     }
 
     /**
+     * Blocks SSRF attacks by rejecting URLs that point to private or reserved
+     * network ranges, loopback addresses, cloud metadata endpoints, and
+     * non-HTTP(S) schemes before any network connection is made.
+     */
+    private function guardAgainstSsrf(string $url): void
+    {
+        $parsed = parse_url($url);
+
+        if (! $parsed || empty($parsed['host'])) {
+            throw new \RuntimeException('Invalid URL.');
+        }
+
+        // Allow only http and https
+        $scheme = strtolower($parsed['scheme'] ?? '');
+        if (! in_array($scheme, ['http', 'https'], true)) {
+            throw new \RuntimeException('Only HTTP and HTTPS URLs are allowed.');
+        }
+
+        $host = strtolower($parsed['host']);
+
+        // Strip IPv6 brackets: [::1] → ::1
+        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
+            $host = substr($host, 1, -1);
+        }
+
+        // Block loopback hostnames directly
+        $blockedHosts = ['localhost', 'localhost.localdomain', '127.0.0.1', '::1', '0.0.0.0'];
+        if (in_array($host, $blockedHosts, true)) {
+            throw new \RuntimeException('Access to this URL is not allowed.');
+        }
+
+        // If the host is already a raw IP, check it immediately
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $this->assertPublicIp($host);
+
+            return;
+        }
+
+        // Resolve all DNS records and check every IP.
+        $records = dns_get_record($host, DNS_A | DNS_AAAA);
+
+        foreach ($records as $record) {
+            $ip = $record['ip'] ?? $record['ipv6'] ?? null;
+            if ($ip !== null) {
+                $this->assertPublicIp($ip);
+            }
+        }
+    }
+
+    /**
+     * Throws if the IP falls inside a private, loopback, link-local,
+     * or otherwise reserved range (RFC 1918, 169.254.x.x, etc.).
+     */
+    private function assertPublicIp(string $ip): void
+    {
+        $isPublic = (bool) filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        );
+
+        if (! $isPublic) {
+            throw new \RuntimeException('Access to this URL is not allowed.');
+        }
+    }
+
+    /**
      * Loads page HTML via HTTP request.
      */
     private function fetchPage(string $url): string
     {
+        $this->guardAgainstSsrf($url);
+
         $response = Http::withHeaders([
             'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

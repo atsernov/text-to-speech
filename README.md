@@ -11,7 +11,7 @@ Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
 
 - Text-to-speech synthesis with selectable voice and playback speed
 - Long text support — automatically split into chunks and merged back
-- File upload (`.txt`, `.docx`) and URL-to-text extraction
+- File upload (`.txt`, `.docx`, `.pdf`) and URL-to-text extraction
 - Session-based audio history with progress tracking (no registration required)
 - Audio files automatically deleted after **30 days**; days remaining shown in history
 - Voice preview samples refreshed daily

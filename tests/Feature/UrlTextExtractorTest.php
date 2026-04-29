@@ -140,13 +140,13 @@ test('extracts article content and ignores navigation and footer', function () {
     $text = $this->extractor->extract('https://example.com/article');
 
     // Main article content must be present
-    expect($text)->toContain('Eesti keele ajalugu');
-    expect($text)->toContain('soome-ugri keelkonda');
-    expect($text)->toContain('19. sajandil');
+    expect($text)->toContain('Eesti keele ajalugu')
+        ->and($text)->toContain('soome-ugri keelkonda')
+        ->and($text)->toContain('19. sajandil')
+        ->and($text)->not->toContain('Logi sisse')
+        ->and($text)->not->toContain('Kõik õigused kaitstud');
 
     // Navigation and footer should not appear in the extracted text
-    expect($text)->not->toContain('Logi sisse');
-    expect($text)->not->toContain('Kõik õigused kaitstud');
 });
 
 // Empty / unextractable content
@@ -161,5 +161,37 @@ test('throws RuntimeException when page has no extractable text', function () {
     ]);
 
     expect(fn () => $this->extractor->extract('https://example.com/spa'))
+        ->toThrow(RuntimeException::class);
+});
+
+// SSRF protection
+
+test('throws RuntimeException for a localhost url', function () {
+    expect(fn () => $this->extractor->extract('http://localhost/admin'))
+        ->toThrow(RuntimeException::class);
+});
+
+test('throws RuntimeException for a loopback ip url', function () {
+    expect(fn () => $this->extractor->extract('http://127.0.0.1/secret'))
+        ->toThrow(RuntimeException::class);
+});
+
+test('throws RuntimeException for a private network ip', function () {
+    expect(fn () => $this->extractor->extract('http://192.168.1.1'))
+        ->toThrow(RuntimeException::class);
+});
+
+test('throws RuntimeException for the aws metadata endpoint', function () {
+    expect(fn () => $this->extractor->extract('http://169.254.169.254/latest/meta-data/'))
+        ->toThrow(RuntimeException::class);
+});
+
+test('throws RuntimeException for a non-http scheme', function () {
+    expect(fn () => $this->extractor->extract('file:///etc/passwd'))
+        ->toThrow(RuntimeException::class);
+});
+
+test('throws RuntimeException for an ipv6 loopback url', function () {
+    expect(fn () => $this->extractor->extract('http://[::1]/admin'))
         ->toThrow(RuntimeException::class);
 });
