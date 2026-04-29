@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -149,8 +150,9 @@ class AudioController extends Controller
     }
 
     /**
-     * Removes a record from the user's history (the file on disk is not deleted).
-     * Validates session_id so a user cannot delete someone else's record.
+     * Permanently deletes an audio file and its database record.
+     *
+     * Validates session_id so a user cannot delete someone else's file.
      */
     public function deleteFile(Request $request, int $id): JsonResponse
     {
@@ -160,13 +162,20 @@ class AudioController extends Controller
             return response()->json(['error' => 'No session'], 403);
         }
 
-        $deleted = AudioFile::where('id', $id)
+        $file = AudioFile::where('id', $id)
             ->where('session_id', $sessionId)
-            ->delete();
+            ->first();
 
-        if (! $deleted) {
+        if (! $file) {
             return response()->json(['error' => 'Record not found'], 404);
         }
+
+        // Delete the physical WAV file first, then the database record.
+        if ($file->filename) {
+            Storage::disk('public')->delete('audio/'.$file->filename);
+        }
+
+        $file->delete();
 
         return response()->json(['ok' => true]);
     }
