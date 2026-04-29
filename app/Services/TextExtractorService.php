@@ -10,6 +10,10 @@ class TextExtractorService
      */
     public function extractFromTxt(string $filePath): string
     {
+        if (! file_exists($filePath)) {
+            throw new \RuntimeException('Failed to open file.');
+        }
+
         $handle = fopen($filePath, 'rb');
         if ($handle === false) {
             throw new \RuntimeException('Failed to open file.');
