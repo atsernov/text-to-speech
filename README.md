@@ -33,7 +33,7 @@ Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
 ### 1. Clone the repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/atsernov/text-to-speech.git
 cd text-to-speech
 ```
 
@@ -136,7 +136,7 @@ docker compose exec app php artisan <command>  # Linux
 ### 1. Clone the repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/atsernov/text-to-speech.git
 cd text-to-speech
 ```
 
