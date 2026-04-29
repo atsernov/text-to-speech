@@ -24,7 +24,7 @@ class AudioController extends Controller
     {
         $request->validate([
             'text' => 'required|string|max:100000',
-            'speaker' => 'required|string',
+            'speaker' => 'required|string|max:100',
             'speed' => 'sometimes|numeric|min:0.5|max:2',
         ]);
 
@@ -58,7 +58,8 @@ class AudioController extends Controller
 
         return response()
             ->json(['job_id' => $jobId])
-            ->withCookie(Cookie::make(self::SESSION_COOKIE, $sessionId, 60 * 24 * 365, httpOnly: true, sameSite: 'lax'));
+            // secure: false because the current deployment uses plain HTTP.
+            ->withCookie(Cookie::make(self::SESSION_COOKIE, $sessionId, 60 * 24 * 365, httpOnly: true, secure: false, sameSite: 'lax'));
     }
 
     /**

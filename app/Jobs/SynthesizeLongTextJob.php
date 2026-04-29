@@ -52,7 +52,7 @@ class SynthesizeLongTextJob implements ShouldQueue
 
                 if (! $response->successful()) {
                     throw new \RuntimeException(
-                        'API returned an error for a part '.($index + 1).': '.$response->body()
+                        'Speech synthesis failed on part '.($index + 1).' (HTTP '.$response->status().').'
                     );
                 }
 
