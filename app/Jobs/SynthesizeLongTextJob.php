@@ -23,6 +23,9 @@ class SynthesizeLongTextJob implements ShouldQueue
 
     public int $tries = 1;
 
+    private const CHUNK_MAX_ATTEMPTS = 3;
+    private const CHUNK_RETRY_BASE_DELAY_MS = 1000;
+
     public function __construct(
         private string $jobId,
         private string $text,
@@ -36,35 +39,37 @@ class SynthesizeLongTextJob implements ShouldQueue
     {
         $chunks = $splitter->split($this->text);
         $total = count($chunks);
-        $tempFiles = [];
+        // Every created temp file — always cleaned up in finally
+        $allTempFiles = [];
+        // Only chunks that finished successfully — used for merging
+        $doneTempFiles = [];
         $mergedTempFile = null;
 
         try {
             $this->updateStatus('processing', 0, $total);
 
             foreach ($chunks as $index => $chunk) {
-                $response = Http::timeout(300)
-                    ->post('https://api.tartunlp.ai/text-to-speech/v2', [
-                        'text' => $chunk,
-                        'speaker' => $this->speaker,
-                        'speed' => $this->speed,
-                    ]);
-
-                if (! $response->successful()) {
-                    throw new \RuntimeException(
-                        'Speech synthesis failed on part '.($index + 1).' (HTTP '.$response->status().').'
-                    );
+                $cancelledBy = Cache::get("tts_cancel_{$this->jobId}");
+                if ($cancelledBy) {
+                    $message = $cancelledBy === 'admin'
+                        ? 'Tühistati administraatori poolt.'
+                        : 'Peatatud kasutaja poolt.';
+                    throw new \RuntimeException($message);
                 }
 
                 $tempFile = tempnam(sys_get_temp_dir(), 'tts_chunk_');
-                file_put_contents($tempFile, $response->body());
-                $tempFiles[] = $tempFile;
+                $allTempFiles[] = $tempFile;
+
+                $this->synthesizeChunk($chunk, $tempFile, $index + 1);
+
+                // Added only after successful synthesis so the failed chunk is excluded
+                $doneTempFiles[] = $tempFile;
 
                 $this->updateStatus('processing', $index + 1, $total);
             }
 
             $mergedTempFile = tempnam(sys_get_temp_dir(), 'tts_merged_');
-            $merger->merge($tempFiles, $mergedTempFile);
+            $merger->merge($doneTempFiles, $mergedTempFile);
 
             $fileName = 'tts_'.Str::random(10).'.wav';
             $stream = fopen($mergedTempFile, 'rb');
@@ -84,20 +89,59 @@ class SynthesizeLongTextJob implements ShouldQueue
                 'progress' => $total,
                 'total' => $total,
                 'audio_url' => $audioUrl,
+                'is_partial' => false,
             ], now()->addHours(2));
 
         } catch (\Exception $e) {
-            AudioFile::where('job_id', $this->jobId)->update(['status' => 'failed']);
+            $partialAudioUrl = null;
+            $partialFileName = null;
+
+            // If at least one chunk was synthesized, save what we have as partial audio
+            if (count($doneTempFiles) > 0) {
+                try {
+                    $partialMerged = tempnam(sys_get_temp_dir(), 'tts_partial_');
+                    $merger->merge($doneTempFiles, $partialMerged);
+
+                    $partialFileName = 'tts_'.Str::random(10).'.wav';
+                    $stream = fopen($partialMerged, 'rb');
+                    Storage::disk('public')->put('audio/'.$partialFileName, $stream);
+                    fclose($stream);
+
+                    if (file_exists($partialMerged)) {
+                        unlink($partialMerged);
+                    }
+
+                    $partialAudioUrl = url('/api/audio/'.$partialFileName);
+                } catch (\Exception) {
+                    // Partial merge failed — proceed without audio
+                }
+            }
+
+            AudioFile::where('job_id', $this->jobId)->update([
+                'status' => 'failed',
+                'filename' => $partialFileName,
+                'audio_url' => $partialAudioUrl,
+                'is_partial' => $partialAudioUrl !== null,
+                'error_message' => $e->getMessage(),
+            ]);
+
+            // Use the cancellation message as-is; for all other errors use a generic user-facing message
+            $knownMessages = ['Peatatud kasutaja poolt.', 'Tühistati administraatori poolt.'];
+            $userFacingError = in_array($e->getMessage(), $knownMessages)
+                ? $e->getMessage()
+                : 'Süntees ebaõnnestus. Proovi hiljem uuesti.';
 
             Cache::put("tts_job_{$this->jobId}", [
                 'status' => 'failed',
-                'progress' => 0,
-                'total' => 0,
-                'error' => $e->getMessage(),
+                'progress' => count($doneTempFiles),
+                'total' => $total,
+                'audio_url' => $partialAudioUrl,
+                'is_partial' => $partialAudioUrl !== null,
+                'error' => $userFacingError,
             ], now()->addHours(2));
 
         } finally {
-            foreach ($tempFiles as $tempFile) {
+            foreach ($allTempFiles as $tempFile) {
                 if (file_exists($tempFile)) {
                     unlink($tempFile);
                 }
@@ -106,6 +150,42 @@ class SynthesizeLongTextJob implements ShouldQueue
                 unlink($mergedTempFile);
             }
         }
+    }
+
+    /**
+     * Sends one text chunk to the TTS API and writes the audio response into $tempFile.
+     * Retries up to CHUNK_MAX_ATTEMPTS times with exponential back-off on failure.
+     */
+    private function synthesizeChunk(string $chunk, string $tempFile, int $partNumber): void
+    {
+        $lastStatus = 0;
+
+        for ($attempt = 1; $attempt <= self::CHUNK_MAX_ATTEMPTS; $attempt++) {
+            file_put_contents($tempFile, '');
+
+            $response = Http::timeout(300)
+                ->sink($tempFile)
+                ->post('https://api.tartunlp.ai/text-to-speech/v2', [
+                    'text' => $chunk,
+                    'speaker' => $this->speaker,
+                    'speed' => $this->speed,
+                ]);
+
+            if ($response->successful()) {
+                return;
+            }
+
+            $lastStatus = $response->status();
+
+            if ($attempt < self::CHUNK_MAX_ATTEMPTS) {
+                $delayMs = self::CHUNK_RETRY_BASE_DELAY_MS * (2 ** ($attempt - 1));
+                usleep($delayMs * 1000);
+            }
+        }
+
+        throw new \RuntimeException(
+            "Speech synthesis failed on part {$partNumber} after ".self::CHUNK_MAX_ATTEMPTS." attempts (HTTP {$lastStatus})."
+        );
     }
 
     private function updateStatus(string $status, int $progress, int $total): void

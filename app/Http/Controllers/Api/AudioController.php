@@ -24,7 +24,7 @@ class AudioController extends Controller
     public function synthesize(Request $request): JsonResponse
     {
         $request->validate([
-            'text' => 'required|string|max:100000',
+            'text' => 'required|string|max:500000',
             'speaker' => 'required|string|max:100',
             'speed' => 'sometimes|numeric|min:0.5|max:2',
         ]);
@@ -119,6 +119,7 @@ class AudioController extends Controller
                 'job_id' => $file->job_id,
                 'status' => $file->status,
                 'audio_url' => $file->audio_url,
+                'is_partial' => (bool) $file->is_partial,
                 'speaker' => $file->speaker,
                 'text_preview' => $file->text_preview,
                 'created_at' => $file->created_at,
@@ -135,8 +136,15 @@ class AudioController extends Controller
                 if ($cache) {
                     $data['progress'] = $cache['progress'] ?? 0;
                     $data['total'] = $cache['total'] ?? 0;
-                    $data['error'] = $cache['error'] ?? null;
                 }
+            }
+
+            // For failed jobs, use cache error if available, otherwise fall back to DB
+            if ($file->status === 'failed') {
+                $cache = Cache::get("tts_job_{$file->job_id}");
+                $data['progress'] = $cache['progress'] ?? 0;
+                $data['total'] = $cache['total'] ?? 0;
+                $data['error'] = $cache['error'] ?? $file->error_message;
             }
 
             if ($file->status === 'pending') {
@@ -147,6 +155,34 @@ class AudioController extends Controller
         });
 
         return response()->json($result);
+    }
+
+    /**
+     * Cancels an active job without deleting the record.
+     * The worker will stop between chunks and save whatever was completed as partial audio.
+     */
+    public function cancelFile(Request $request, int $id): JsonResponse
+    {
+        $sessionId = $request->cookie(self::SESSION_COOKIE);
+
+        if (! $sessionId) {
+            return response()->json(['error' => 'No session'], 403);
+        }
+
+        $file = AudioFile::where('id', $id)
+            ->where('session_id', $sessionId)
+            ->whereIn('status', ['pending', 'processing'])
+            ->first();
+
+        if (! $file) {
+            return response()->json(['error' => 'Record not found'], 404);
+        }
+
+        if ($file->job_id) {
+            Cache::put("tts_cancel_{$file->job_id}", 'user', now()->addHours(2));
+        }
+
+        return response()->json(['ok' => true]);
     }
 
     /**
@@ -173,6 +209,11 @@ class AudioController extends Controller
         // Delete the physical WAV file first, then the database record.
         if ($file->filename) {
             Storage::disk('public')->delete('audio/'.$file->filename);
+        }
+
+        // If an active job is running, signal the worker to stop between chunks
+        if ($file->job_id && in_array($file->status, ['pending', 'processing'])) {
+            Cache::put("tts_cancel_{$file->job_id}", true, now()->addHours(2));
         }
 
         $file->delete();

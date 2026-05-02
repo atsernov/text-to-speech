@@ -15,6 +15,8 @@ class AudioFile extends Model
         'session_id',
         'filename',
         'audio_url',
+        'error_message',
+        'is_partial',
         'speaker',
         'text_preview',
     ];
@@ -23,11 +25,14 @@ class AudioFile extends Model
 
     /**
      * Returns the number of days remaining before this file is auto-deleted.
-     * Only meaningful for 'done' files. Returns null for all other statuses.
+     * Calculated for 'done' files and 'failed' files that have partial audio.
      */
     public function getExpiresInDaysAttribute(): ?int
     {
-        if ($this->status !== 'done' || ! $this->created_at) {
+        $hasAudio = $this->status === 'done'
+            || ($this->status === 'failed' && $this->is_partial && $this->audio_url);
+
+        if (! $hasAudio || ! $this->created_at) {
             return null;
         }
 

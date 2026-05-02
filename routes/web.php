@@ -18,6 +18,7 @@ Route::middleware(['auth', EnsureUserIsAdmin::class])->prefix('admin')->name('ad
 
     Route::delete('/jobs/{id}', [AdminController::class, 'cancelJob'])->name('jobs.cancel');
     Route::delete('/files/{id}', [AdminController::class, 'deleteFile'])->name('files.delete');
+    Route::post('/files/{id}/cancel', [AdminController::class, 'cancelAdminFile'])->name('files.cancel');
 });
 
 require __DIR__.'/settings.php';

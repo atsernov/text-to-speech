@@ -9,6 +9,8 @@ type AudioFile = {
     text_preview: string | null;
     audio_url: string | null;
     filename: string | null;
+    error_message: string | null;
+    is_partial: boolean;
     created_at: string;
     session_id: string;
     expires_in_days: number | null;
@@ -31,9 +33,22 @@ const props = defineProps<{
 const search = ref(props.filters.search ?? '');
 const status = ref(props.filters.status ?? '');
 const deleting = ref<Set<number>>(new Set());
+const cancelling = ref<Set<number>>(new Set());
 
 const applyFilters = () => {
     router.get('/admin/files', { search: search.value, status: status.value }, { preserveScroll: true });
+};
+
+const cancelFile = (id: number) => {
+    if (cancelling.value.has(id)) {
+        return;
+    }
+
+    cancelling.value.add(id);
+    router.post(`/admin/files/${id}/cancel`, {}, {
+        preserveScroll: true,
+        onFinish: () => cancelling.value.delete(id),
+    });
 };
 
 const deleteFile = (id: number) => {
@@ -119,6 +134,7 @@ const statusClass = (s: string) => ({
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Speaker</th>
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Preview</th>
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Audio</th>
+                        <th class="px-4 py-3 text-left font-medium text-muted-foreground">Error</th>
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Expires</th>
                         <th class="px-4 py-3 text-left font-medium text-muted-foreground">Action</th>
@@ -140,14 +156,29 @@ const statusClass = (s: string) => ({
                             <span class="line-clamp-1">{{ file.text_preview ?? '—' }}</span>
                         </td>
 
-                        <!-- Compact audio player for done files -->
+                        <!-- Audio player for done files and partial failed files -->
                         <td class="px-4 py-3">
-                            <audio
-                                v-if="file.status === 'done' && file.audio_url"
-                                :src="file.audio_url"
-                                controls
-                                style="height: 28px; width: 180px;"
-                            />
+                            <div v-if="file.audio_url" class="flex flex-col gap-1">
+                                <audio
+                                    :src="file.audio_url"
+                                    controls
+                                    style="height: 28px; width: 180px;"
+                                />
+                                <span
+                                    v-if="file.is_partial"
+                                    class="text-xs text-amber-600 dark:text-amber-400"
+                                >Osaline</span>
+                            </div>
+                            <span v-else class="text-xs text-muted-foreground">—</span>
+                        </td>
+
+                        <!-- Error message (only for failed jobs) -->
+                        <td class="max-w-xs px-4 py-3">
+                            <span
+                                v-if="file.status === 'failed' && file.error_message"
+                                class="line-clamp-2 text-xs text-destructive"
+                                :title="file.error_message"
+                            >{{ file.error_message }}</span>
                             <span v-else class="text-xs text-muted-foreground">—</span>
                         </td>
 
@@ -172,7 +203,19 @@ const statusClass = (s: string) => ({
                         </td>
 
                         <td class="px-4 py-3">
+                            <!-- Cancel for active jobs -->
                             <button
+                                v-if="['pending', 'processing'].includes(file.status)"
+                                type="button"
+                                :disabled="cancelling.has(file.id)"
+                                class="rounded-md border border-amber-500/50 px-2.5 py-1 text-xs text-amber-600 transition-colors hover:bg-amber-500 hover:text-white disabled:opacity-50 dark:text-amber-400"
+                                @click="cancelFile(file.id)"
+                            >
+                                Cancel
+                            </button>
+                            <!-- Delete for completed/failed files -->
+                            <button
+                                v-else
                                 type="button"
                                 :disabled="deleting.has(file.id)"
                                 class="rounded-md border border-destructive/50 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive hover:text-white disabled:opacity-50"

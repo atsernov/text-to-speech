@@ -278,19 +278,31 @@ const jobProgress = ref(0);
 const jobTotal = ref(0);
 const jobQueuePosition = ref<number | null>(null);
 const audioUrl = ref<string | null>(null);
+const isPartial = ref(false);
 
 let pollingTimeout: ReturnType<typeof setTimeout> | null = null;
+let statusFailCount = 0;
+let currentJobId: string | null = null;
+const STATUS_MAX_RETRIES = 3;
 
 const stopPolling = () => {
     if (pollingTimeout !== null) {
         clearTimeout(pollingTimeout);
         pollingTimeout = null;
     }
+
+    statusFailCount = 0;
+    currentJobId = null;
+    jobCancellationRequested.value = false;
 };
 
 const pollStatus = async (jobId: string) => {
     try {
         const { data } = await axios.get(`/api/synthesis/status/${jobId}`);
+
+        // Successful response — reset the failure counter
+        statusFailCount = 0;
+
         jobStatus.value = data.status;
         jobProgress.value = data.progress ?? 0;
         jobTotal.value = data.total ?? 0;
@@ -300,15 +312,23 @@ const pollStatus = async (jobId: string) => {
             audioUrl.value = data.audio_url;
             isLoading.value = false;
             stopPolling();
-            await loadHistory();
+            stopHistoryPolling(); // Stop independent history timer before reloading
+            await loadHistory();  // This result is now authoritative — no race
 
             return;
         }
 
         if (data.status === 'failed') {
             errorMessage.value = data.error ?? 'Sünteesimisel tekkis viga.';
+
+            if (data.audio_url) {
+                audioUrl.value = data.audio_url;
+                isPartial.value = true;
+            }
+
             isLoading.value = false;
             stopPolling();
+            stopHistoryPolling();
             await loadHistory();
 
             return;
@@ -317,9 +337,16 @@ const pollStatus = async (jobId: string) => {
         const interval = data.status === 'pending' ? 3000 : 2000;
         pollingTimeout = setTimeout(() => pollStatus(jobId), interval);
     } catch {
-        errorMessage.value = 'Ülesande staatuse päring ebaõnnestus.';
-        isLoading.value = false;
-        stopPolling();
+        statusFailCount++;
+
+        if (statusFailCount >= STATUS_MAX_RETRIES) {
+            errorMessage.value = 'Ülesande staatuse päring ebaõnnestus.';
+            isLoading.value = false;
+            stopPolling();
+        } else {
+            // Retry after a short delay — transient network hiccup
+            pollingTimeout = setTimeout(() => pollStatus(jobId), 4000);
+        }
     }
 };
 
@@ -331,6 +358,8 @@ const sendText = async () => {
     isLoading.value = true;
     errorMessage.value = '';
     audioUrl.value = null;
+    isPartial.value = false;
+    jobCancellationRequested.value = false;
     jobStatus.value = 'pending';
     jobProgress.value = 0;
     jobTotal.value = 0;
@@ -343,6 +372,7 @@ const sendText = async () => {
             speaker: selectedSpeaker.value,
             speed: speed.value,
         });
+        currentJobId = data.job_id;
         await loadHistory();
         pollingTimeout = setTimeout(() => pollStatus(data.job_id), 2000);
     } catch {
@@ -358,6 +388,7 @@ type HistoryItem = {
     job_id: string | null;
     status: 'pending' | 'processing' | 'done' | 'failed';
     audio_url: string | null;
+    is_partial: boolean;
     speaker: string;
     text_preview: string | null;
     created_at: string;
@@ -419,6 +450,26 @@ const loadHistory = async () => {
     try {
         const { data } = await axios.get('/api/my-files');
         historyItems.value = data;
+
+        // Remove items from cancelRequestedItems once the worker has finished
+        if (cancelRequestedItems.value.size > 0) {
+            const finished = new Set(
+                data
+                    .filter(
+                        (i: HistoryItem) =>
+                            cancelRequestedItems.value.has(i.id) &&
+                            !['pending', 'processing'].includes(i.status),
+                    )
+                    .map((i: HistoryItem) => i.id),
+            );
+
+            if (finished.size > 0) {
+                cancelRequestedItems.value = new Set(
+                    [...cancelRequestedItems.value].filter((id) => !finished.has(id)),
+                );
+            }
+        }
+
         scheduleHistoryRefresh();
     } catch {
         // Silently ignore history is non-critical
@@ -435,13 +486,84 @@ const toggleHistory = () => {
     }
 };
 
+const cancellingItems = ref<Set<number>>(new Set());
+// IDs of items where cancel was sent but the worker hasn't finished yet
+const cancelRequestedItems = ref<Set<number>>(new Set());
+const isCancellingJob = ref(false);
+// Stays true from the moment stop is clicked until the job finishes (failed/done)
+const jobCancellationRequested = ref(false);
+
+/**
+ * Cancels an active job: the worker stops, saves partial audio, record stays in history.
+ */
+const cancelHistoryItem = async (item: HistoryItem) => {
+    if (!item.job_id || cancellingItems.value.has(item.id)) {
+        return;
+    }
+
+    cancellingItems.value.add(item.id);
+
+    try {
+        await axios.post(`/api/my-files/${item.id}/cancel`);
+        // Mark as "stopping" — card shows spinner until the worker finishes
+        cancelRequestedItems.value = new Set([...cancelRequestedItems.value, item.id]);
+    } catch {
+        // Silently ignore
+    } finally {
+        cancellingItems.value.delete(item.id);
+    }
+};
+
+/**
+ * Cancels the job currently shown in the main panel.
+ * Polling continues so partial audio is displayed when the worker finishes.
+ */
+const cancelCurrentJob = async () => {
+    if (!currentJobId || isCancellingJob.value) {
+return;
+}
+
+    const item = historyItems.value.find((i) => i.job_id === currentJobId);
+
+    if (!item) {
+return;
+}
+
+    isCancellingJob.value = true;
+    jobCancellationRequested.value = true;
+
+    try {
+        await axios.post(`/api/my-files/${item.id}/cancel`);
+        // Keep polling — it will naturally pick up failed+partial status
+    } catch {
+        // Silently ignore
+    } finally {
+        isCancellingJob.value = false;
+    }
+};
+
 const deleteHistoryItem = async (id: number) => {
+    const item = historyItems.value.find((i) => i.id === id);
     historyItems.value = historyItems.value.filter((i) => i.id !== id);
+
+    // If this is the job currently running in the main panel — stop polling silently
+    if (
+        item?.job_id &&
+        item.job_id === currentJobId &&
+        ['pending', 'processing'].includes(item.status)
+    ) {
+        stopPolling();
+        isLoading.value = false;
+        jobStatus.value = 'idle';
+        audioUrl.value = null;
+        isPartial.value = false;
+        errorMessage.value = '';
+    }
 
     try {
         await axios.delete(`/api/my-files/${id}`);
     } catch {
-        // Silently ignore the record is already removed from the UI
+        // Silently ignore — the record is already removed from the UI
     }
 };
 
@@ -655,9 +777,11 @@ onUnmounted(() => {
                             :key="item.id"
                             class="rounded-lg border bg-background p-3"
                             :class="
-                                item.status === 'failed'
-                                    ? 'border-destructive/40'
-                                    : 'border-border'
+                                item.status === 'failed' && item.is_partial
+                                    ? 'border-amber-500/40'
+                                    : item.status === 'failed'
+                                      ? 'border-destructive/40'
+                                      : 'border-border'
                             "
                         >
                             <!-- Meta -->
@@ -673,7 +797,27 @@ onUnmounted(() => {
                                         class="text-xs text-muted-foreground"
                                         >{{ formatDate(item.created_at) }}</span
                                     >
+                                    <!-- Stop button for active jobs -->
                                     <button
+                                        v-if="['pending', 'processing'].includes(item.status)"
+                                        type="button"
+                                        title="Peata ja salvesta osaline heli"
+                                        :disabled="cancellingItems.has(item.id)"
+                                        class="rounded p-0.5 text-amber-500 opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+                                        @click="cancelHistoryItem(item)"
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            class="h-3.5 w-3.5"
+                                            viewBox="0 0 24 24"
+                                            fill="currentColor"
+                                        >
+                                            <rect x="5" y="5" width="14" height="14" rx="2" />
+                                        </svg>
+                                    </button>
+                                    <!-- Delete button for finished jobs -->
+                                    <button
+                                        v-else
                                         type="button"
                                         title="Eemalda ajaloost"
                                         class="rounded p-0.5 text-muted-foreground opacity-50 transition-opacity hover:text-destructive hover:opacity-100"
@@ -705,9 +849,28 @@ onUnmounted(() => {
                                 {{ item.text_preview }}
                             </p>
 
+                            <!-- Status: cancellation requested — shown while worker finishes -->
+                            <div
+                                v-if="cancelRequestedItems.has(item.id)"
+                                class="flex items-center gap-2 py-1"
+                            >
+                                <svg
+                                    class="h-4 w-4 animate-spin text-amber-500"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                </svg>
+                                <span class="text-xs text-amber-600 dark:text-amber-400">
+                                    Peatamine... oota, kuni praegune osa lõpetatakse
+                                </span>
+                            </div>
+
                             <!-- Status: queued -->
                             <div
-                                v-if="item.status === 'pending'"
+                                v-else-if="item.status === 'pending'"
                                 class="flex items-center gap-2 py-1"
                             >
                                 <svg
@@ -804,11 +967,48 @@ onUnmounted(() => {
                                 </div>
                             </div>
 
-                            <div
-                                v-else-if="item.status === 'failed'"
-                                class="rounded bg-destructive/10 px-2 py-1 text-xs text-destructive"
-                            >
-                                Viga: {{ item.error ?? 'Tundmatu viga' }}
+                            <div v-else-if="item.status === 'failed'">
+                                <!-- User-cancelled: show neutral stop message, not error -->
+                                <div
+                                    v-if="item.error === 'Peatatud kasutaja poolt.'"
+                                    class="rounded bg-muted px-2 py-1 text-xs text-muted-foreground"
+                                >
+                                    {{ item.error }}
+                                </div>
+                                <!-- Actual error: show in red -->
+                                <div
+                                    v-else
+                                    class="rounded bg-destructive/10 px-2 py-1 text-xs text-destructive"
+                                >
+                                    Viga: {{ item.error ?? 'Tundmatu viga' }}
+                                </div>
+                                <template v-if="item.audio_url && item.is_partial">
+                                    <div class="mt-2 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                        </svg>
+                                        <span>
+                                            Osaline heli
+                                            <template v-if="item.total > 0">
+                                                — {{ item.progress }} / {{ item.total }} osa
+                                            </template>
+                                        </span>
+                                    </div>
+                                    <audio
+                                        :src="item.audio_url"
+                                        controls
+                                        preload="metadata"
+                                        class="mt-1.5 w-full"
+                                        style="height: 32px"
+                                    />
+                                    <a
+                                        :href="item.audio_url"
+                                        download="audio.wav"
+                                        class="mt-1 block text-xs text-primary underline hover:opacity-80"
+                                    >
+                                        Laadi alla
+                                    </a>
+                                </template>
                             </div>
 
                             <template
@@ -819,6 +1019,7 @@ onUnmounted(() => {
                                 <audio
                                     :src="item.audio_url"
                                     controls
+                                    preload="metadata"
                                     class="w-full"
                                     style="height: 32px"
                                 />
@@ -1165,12 +1366,12 @@ onUnmounted(() => {
                 <span
                     class="text-xs"
                     :class="
-                        inputText.length > 100000
+                        inputText.length > 500000
                             ? 'text-destructive'
                             : 'text-muted-foreground'
                     "
                 >
-                    {{ inputText.length.toLocaleString() }} / 100 000
+                    {{ inputText.length.toLocaleString() }} / 500 000
                 </span>
             </div>
 
@@ -1189,7 +1390,7 @@ onUnmounted(() => {
                             <button
                                 type="button"
                                 class="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
-                                :disabled="isLoading || !inputText.trim() || inputText.length > 100000"
+                                :disabled="isLoading || !inputText.trim() || inputText.length > 1000000"
                                 @click="sendText"
                             >
                                 {{ isLoading ? 'Töötleb...' : 'Häälülekanne' }}
@@ -1222,7 +1423,7 @@ onUnmounted(() => {
             <button
                 class="mt-3 w-full cursor-pointer rounded-md bg-primary py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="
-                    isLoading || !inputText.trim() || inputText.length > 100000
+                    isLoading || !inputText.trim() || inputText.length > 1000000
                 "
                 @click="sendText"
             >
@@ -1260,6 +1461,30 @@ onUnmounted(() => {
                         }"
                     />
                 </div>
+                <div class="mt-2 flex justify-end">
+                    <span
+                        v-if="jobCancellationRequested"
+                        class="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                    >
+                        <svg class="h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                        </svg>
+                        Peatamine... oota, kuni praegune osa lõpetatakse
+                    </span>
+                    <button
+                        v-else
+                        type="button"
+                        :disabled="isCancellingJob"
+                        class="flex items-center gap-1 text-xs text-muted-foreground underline transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+                        @click="cancelCurrentJob"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="5" y="5" width="14" height="14" rx="2" />
+                        </svg>
+                        Peata ja salvesta osaline heli
+                    </button>
+                </div>
             </div>
 
             <div
@@ -1270,7 +1495,18 @@ onUnmounted(() => {
             </div>
 
             <div v-if="audioUrl" class="mt-6">
-                <audio :src="audioUrl" controls autoplay class="w-full" />
+                <div
+                    v-if="isPartial"
+                    class="mb-2 flex items-center gap-1.5 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                    <span>
+                        Osaline heli — {{ jobProgress }} / {{ jobTotal }} osa sünteesiti edukalt
+                    </span>
+                </div>
+                <audio :src="audioUrl" controls :autoplay="!isPartial" class="w-full" />
                 <a
                     :href="audioUrl"
                     download="audio.wav"

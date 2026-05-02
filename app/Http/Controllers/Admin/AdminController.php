@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AudioFile;
-use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
@@ -38,23 +38,51 @@ class AdminController extends Controller
         return inertia('admin/Jobs', ['jobs' => $jobs]);
     }
 
-    public function cancelJob(int $id): JsonResponse
+    public function cancelJob(int $id): RedirectResponse
     {
         $job = AudioFile::whereIn('status', ['pending', 'processing'])->findOrFail($id);
 
-        // Mark as failed in cache so the polling loop stops
         if ($job->job_id) {
+            // Cancellation flag — checked by the running job between chunks
+            Cache::put("tts_cancel_{$job->job_id}", 'admin', now()->addHours(2));
+
             Cache::put("tts_job_{$job->job_id}", [
                 'status' => 'failed',
                 'progress' => 0,
                 'total' => 0,
-                'error' => 'Cancelled by administrator.',
+                'error' => 'Ülesanne tühistati administraatori poolt.',
             ], now()->addHours(2));
         }
 
-        $job->update(['status' => 'failed']);
+        $job->update([
+            'status' => 'failed',
+            'error_message' => 'Cancelled by administrator.',
+        ]);
 
-        return response()->json(['ok' => true]);
+        return redirect()->back();
+    }
+
+    public function cancelAdminFile(int $id): RedirectResponse
+    {
+        $file = AudioFile::whereIn('status', ['pending', 'processing'])->findOrFail($id);
+
+        if ($file->job_id) {
+            Cache::put("tts_cancel_{$file->job_id}", 'admin', now()->addHours(2));
+            Cache::put("tts_job_{$file->job_id}", [
+                'status' => 'failed',
+                'progress' => 0,
+                'total' => 0,
+                'error' => 'Ülesanne tühistati administraatori poolt.',
+                'is_partial' => false,
+            ], now()->addHours(2));
+        }
+
+        $file->update([
+            'status' => 'failed',
+            'error_message' => 'Tühistati administraatori poolt.',
+        ]);
+
+        return redirect()->back();
     }
 
     // ── Files ─────────────────────────────────────────────────────────────────
@@ -79,7 +107,7 @@ class AdminController extends Controller
         ]);
     }
 
-    public function deleteFile(int $id): JsonResponse
+    public function deleteFile(int $id): RedirectResponse
     {
         $file = AudioFile::findOrFail($id);
 
@@ -88,8 +116,9 @@ class AdminController extends Controller
             Storage::disk('public')->delete('audio/'.$file->filename);
         }
 
-        // Mark cache as failed so any active polling stops
+        // Cancel any running job and stop the user's polling
         if ($file->job_id) {
+            Cache::put("tts_cancel_{$file->job_id}", true, now()->addHours(2));
             Cache::put("tts_job_{$file->job_id}", [
                 'status' => 'failed',
                 'progress' => 0,
@@ -100,7 +129,7 @@ class AdminController extends Controller
 
         $file->delete();
 
-        return response()->json(['ok' => true]);
+        return redirect()->back();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

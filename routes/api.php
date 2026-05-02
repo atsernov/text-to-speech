@@ -21,3 +21,4 @@ Route::get('/synthesis/status/{jobId}', [AudioController::class, 'status'])->mid
 Route::get('/audio/{filename}', [AudioController::class, 'stream'])->middleware('throttle:light')->name('audio.stream');
 Route::get('/my-files', [AudioController::class, 'myFiles'])->middleware('throttle:light')->name('my.files');
 Route::delete('/my-files/{id}', [AudioController::class, 'deleteFile'])->middleware('throttle:light')->name('my.files.delete');
+Route::post('/my-files/{id}/cancel', [AudioController::class, 'cancelFile'])->middleware('throttle:light')->name('my.files.cancel');
