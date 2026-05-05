@@ -16,7 +16,7 @@ class CleanupAudioFiles extends Command
     {
         $cutoff = now()->subDays(AudioFile::RETENTION_DAYS);
 
-        // Delete WAV files from disk and their DB records
+        // Delete files from disk and their DB records
         $doneFiles = AudioFile::where('status', 'done')
             ->where('created_at', '<', $cutoff)
             ->get();

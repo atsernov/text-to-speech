@@ -246,6 +246,9 @@ class AudioController extends Controller
             abort(403);
         }
 
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $contentType = $ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+
         $size = filesize($path);
         $rangeHeader = request()->header('Range');
 
@@ -270,7 +273,7 @@ class AudioController extends Controller
                 },
                 206,
                 [
-                    'Content-Type' => 'audio/wav',
+                    'Content-Type' => $contentType,
                     'Accept-Ranges' => 'bytes',
                     'Content-Length' => $length,
                     'Content-Range' => "bytes {$start}-{$end}/{$size}",
@@ -289,7 +292,7 @@ class AudioController extends Controller
             },
             200,
             [
-                'Content-Type' => 'audio/wav',
+                'Content-Type' => $contentType,
                 'Accept-Ranges' => 'bytes',
                 'Content-Length' => $size,
             ]

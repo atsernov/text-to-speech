@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         poppler-utils \
         tesseract-ocr \
         tesseract-ocr-est \
+        ffmpeg \
     && docker-php-ext-install \
         pdo_sqlite \
         zip \

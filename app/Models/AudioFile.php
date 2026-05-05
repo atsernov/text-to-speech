@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class AudioFile extends Model
 {
     /** How many days audio files are kept before automatic deletion. */
-    public const RETENTION_DAYS = 30;
+    public const RETENTION_DAYS = 7;
 
     protected $fillable = [
         'job_id',

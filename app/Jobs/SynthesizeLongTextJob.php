@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Models\AudioFile;
 use App\Services\TextSplitterService;
-use App\Services\WavMergerService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -12,6 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -25,6 +25,7 @@ class SynthesizeLongTextJob implements ShouldQueue
 
     private const CHUNK_MAX_ATTEMPTS = 3;
     private const CHUNK_RETRY_BASE_DELAY_MS = 1000;
+    private const MP3_BITRATE = '64k';
 
     public function __construct(
         private string $jobId,
@@ -35,15 +36,15 @@ class SynthesizeLongTextJob implements ShouldQueue
         private float $speed = 1.0,
     ) {}
 
-    public function handle(TextSplitterService $splitter, WavMergerService $merger): void
+    public function handle(TextSplitterService $splitter): void
     {
         $chunks = $splitter->split($this->text);
         $total = count($chunks);
         // Every created temp file — always cleaned up in finally
         $allTempFiles = [];
-        // Only chunks that finished successfully — used for merging
-        $doneTempFiles = [];
-        $mergedTempFile = null;
+        // Successfully converted MP3 chunks — used for concatenation
+        $doneMp3Files = [];
+        $finalMp3Temp = null;
 
         try {
             $this->updateStatus('processing', 0, $total);
@@ -57,22 +58,35 @@ class SynthesizeLongTextJob implements ShouldQueue
                     throw new \RuntimeException($message);
                 }
 
-                $tempFile = tempnam(sys_get_temp_dir(), 'tts_chunk_');
-                $allTempFiles[] = $tempFile;
+                // Step 1: Fetch WAV from the TTS API
+                $wavFile = tempnam(sys_get_temp_dir(), 'tts_wav_');
+                $allTempFiles[] = $wavFile;
 
-                $this->synthesizeChunk($chunk, $tempFile, $index + 1);
+                $this->synthesizeChunk($chunk, $wavFile, $index + 1);
 
-                // Added only after successful synthesis so the failed chunk is excluded
-                $doneTempFiles[] = $tempFile;
+                // Step 2: Convert WAV → MP3 immediately and discard WAV
+                $mp3File = tempnam(sys_get_temp_dir(), 'tts_mp3_');
+                $allTempFiles[] = $mp3File;
+
+                $this->convertToMp3($wavFile, $mp3File);
+
+                // WAV is no longer needed — free disk space now
+                if (file_exists($wavFile)) {
+                    unlink($wavFile);
+                }
+
+                // Only added after successful conversion so a failed chunk is excluded
+                $doneMp3Files[] = $mp3File;
 
                 $this->updateStatus('processing', $index + 1, $total);
             }
 
-            $mergedTempFile = tempnam(sys_get_temp_dir(), 'tts_merged_');
-            $merger->merge($doneTempFiles, $mergedTempFile);
+            // All chunks succeeded — concatenate into the final MP3
+            $finalMp3Temp = tempnam(sys_get_temp_dir(), 'tts_merged_');
+            $this->concatMp3Files($doneMp3Files, $finalMp3Temp);
 
-            $fileName = 'tts_'.Str::random(10).'.wav';
-            $stream = fopen($mergedTempFile, 'rb');
+            $fileName = 'tts_'.Str::random(10).'.mp3';
+            $stream = fopen($finalMp3Temp, 'rb');
             Storage::disk('public')->put('audio/'.$fileName, $stream);
             fclose($stream);
 
@@ -96,24 +110,24 @@ class SynthesizeLongTextJob implements ShouldQueue
             $partialAudioUrl = null;
             $partialFileName = null;
 
-            // If at least one chunk was synthesized, save what we have as partial audio
-            if (count($doneTempFiles) > 0) {
+            // If at least one chunk was converted, save what we have as partial audio
+            if (count($doneMp3Files) > 0) {
                 try {
-                    $partialMerged = tempnam(sys_get_temp_dir(), 'tts_partial_');
-                    $merger->merge($doneTempFiles, $partialMerged);
+                    $partialMp3 = tempnam(sys_get_temp_dir(), 'tts_partial_');
+                    $this->concatMp3Files($doneMp3Files, $partialMp3);
 
-                    $partialFileName = 'tts_'.Str::random(10).'.wav';
-                    $stream = fopen($partialMerged, 'rb');
+                    $partialFileName = 'tts_'.Str::random(10).'.mp3';
+                    $stream = fopen($partialMp3, 'rb');
                     Storage::disk('public')->put('audio/'.$partialFileName, $stream);
                     fclose($stream);
 
-                    if (file_exists($partialMerged)) {
-                        unlink($partialMerged);
+                    if (file_exists($partialMp3)) {
+                        unlink($partialMp3);
                     }
 
                     $partialAudioUrl = url('/api/audio/'.$partialFileName);
                 } catch (\Exception) {
-                    // Partial merge failed — proceed without audio
+                    // Partial concat failed — proceed without audio
                 }
             }
 
@@ -133,7 +147,7 @@ class SynthesizeLongTextJob implements ShouldQueue
 
             Cache::put("tts_job_{$this->jobId}", [
                 'status' => 'failed',
-                'progress' => count($doneTempFiles),
+                'progress' => count($doneMp3Files),
                 'total' => $total,
                 'audio_url' => $partialAudioUrl,
                 'is_partial' => $partialAudioUrl !== null,
@@ -146,14 +160,14 @@ class SynthesizeLongTextJob implements ShouldQueue
                     unlink($tempFile);
                 }
             }
-            if ($mergedTempFile && file_exists($mergedTempFile)) {
-                unlink($mergedTempFile);
+            if ($finalMp3Temp && file_exists($finalMp3Temp)) {
+                unlink($finalMp3Temp);
             }
         }
     }
 
     /**
-     * Sends one text chunk to the TTS API and writes the audio response into $tempFile.
+     * Sends one text chunk to the TTS API and writes the WAV response into $tempFile.
      * Retries up to CHUNK_MAX_ATTEMPTS times with exponential back-off on failure.
      */
     private function synthesizeChunk(string $chunk, string $tempFile, int $partNumber): void
@@ -186,6 +200,60 @@ class SynthesizeLongTextJob implements ShouldQueue
         throw new \RuntimeException(
             "Speech synthesis failed on part {$partNumber} after ".self::CHUNK_MAX_ATTEMPTS." attempts (HTTP {$lastStatus})."
         );
+    }
+
+    /**
+     * Converts a WAV file to MP3 using ffmpeg.
+     */
+    private function convertToMp3(string $inputWav, string $outputMp3): void
+    {
+        $cmd = sprintf(
+            'ffmpeg -i %s -b:a %s -f mp3 -y %s 2>&1',
+            escapeshellarg($inputWav),
+            escapeshellarg(self::MP3_BITRATE),
+            escapeshellarg($outputMp3)
+        );
+
+        exec($cmd, $output, $code);
+
+        if ($code !== 0) {
+            Log::error('ffmpeg WAV→MP3 failed', ['output' => implode("\n", $output)]);
+            throw new \RuntimeException('Audio encoding failed.');
+        }
+    }
+
+    /**
+     * Concatenates multiple MP3 files into a single output file using ffmpeg.
+     * For a single input file, copies it directly (no re-encoding needed).
+     */
+    private function concatMp3Files(array $inputMp3s, string $outputMp3): void
+    {
+        if (count($inputMp3s) === 1) {
+            copy($inputMp3s[0], $outputMp3);
+
+            return;
+        }
+
+        $listFile = tempnam(sys_get_temp_dir(), 'tts_list_');
+        $lines = array_map(fn ($f) => 'file '.escapeshellarg($f), $inputMp3s);
+        file_put_contents($listFile, implode("\n", $lines));
+
+        $cmd = sprintf(
+            'ffmpeg -f concat -safe 0 -i %s -c copy -f mp3 -y %s 2>&1',
+            escapeshellarg($listFile),
+            escapeshellarg($outputMp3)
+        );
+
+        exec($cmd, $output, $code);
+
+        if (file_exists($listFile)) {
+            unlink($listFile);
+        }
+
+        if ($code !== 0) {
+            Log::error('ffmpeg concat failed', ['output' => implode("\n", $output)]);
+            throw new \RuntimeException('Audio concatenation failed.');
+        }
     }
 
     private function updateStatus(string $status, int $progress, int $total): void

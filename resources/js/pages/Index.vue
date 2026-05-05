@@ -572,6 +572,12 @@ const activeHistoryCount = () =>
         ['pending', 'processing'].includes(i.status),
     ).length;
 
+const audioDownloadName = (url: string) => {
+    const match = url.match(/\.(\w+)(?:\?|$)/);
+
+    return match ? `audio.${match[1]}` : 'audio.mp3';
+};
+
 // --- Voice preview ---
 let previewAudio: HTMLAudioElement | null = null;
 const isPreviewPlaying = ref(false);
@@ -1003,7 +1009,7 @@ onUnmounted(() => {
                                     />
                                     <a
                                         :href="item.audio_url"
-                                        download="audio.wav"
+                                        :download="audioDownloadName(item.audio_url)"
                                         class="mt-1 block text-xs text-primary underline hover:opacity-80"
                                     >
                                         Laadi alla
@@ -1028,9 +1034,9 @@ onUnmounted(() => {
                                         v-if="item.expires_in_days !== null"
                                         class="flex items-center gap-1 text-xs"
                                         :class="
-                                            item.expires_in_days <= 3
+                                            item.expires_in_days <= 1
                                                 ? 'text-destructive'
-                                                : item.expires_in_days <= 7
+                                                : item.expires_in_days <= 3
                                                   ? 'text-amber-500 dark:text-amber-400'
                                                   : 'text-muted-foreground'
                                         "
@@ -1043,7 +1049,7 @@ onUnmounted(() => {
                                     </span>
                                     <a
                                         :href="item.audio_url"
-                                        download="audio.wav"
+                                        :download="audioDownloadName(item.audio_url)"
                                         class="ml-auto text-xs text-primary underline hover:opacity-80"
                                     >
                                         Laadi alla
@@ -1509,7 +1515,7 @@ onUnmounted(() => {
                 <audio :src="audioUrl" controls :autoplay="!isPartial" class="w-full" />
                 <a
                     :href="audioUrl"
-                    download="audio.wav"
+                    :download="audioDownloadName(audioUrl)"
                     class="mt-2 block text-center text-sm text-primary underline hover:opacity-80"
                 >
                     Laadi alla heli

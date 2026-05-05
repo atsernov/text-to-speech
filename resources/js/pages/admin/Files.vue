@@ -189,9 +189,9 @@ const statusClass = (s: string) => ({
                                 v-if="file.expires_in_days !== null"
                                 class="rounded-full px-2 py-0.5 font-medium"
                                 :class="
-                                    file.expires_in_days <= 3
+                                    file.expires_in_days <= 1
                                         ? 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400'
-                                        : file.expires_in_days <= 7
+                                        : file.expires_in_days <= 3
                                           ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
                                           : 'bg-muted text-muted-foreground'
                                 "
