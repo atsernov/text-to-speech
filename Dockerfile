@@ -59,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
     && docker-php-ext-install \
         pdo_sqlite \
+        pdo_mysql \
         zip \
         intl \
         mbstring \

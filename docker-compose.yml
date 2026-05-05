@@ -4,9 +4,7 @@ services:
     ports:
       - "8080:80"
     volumes:
-      # SQLite database — stored on host disk, survives container restarts
-      - ./database:/app/database
-      # Generated audio files and voice samples — same reason
+      # Generated audio files and voice samples
       - ./storage/app/public:/app/storage/app/public
     env_file:
       - .env
@@ -14,4 +12,27 @@ services:
       APP_ENV: production
       APP_DEBUG: "false"
       APP_URL: http://localhost:8080
+    depends_on:
+      mysql:
+        condition: service_healthy
     restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      start_period: 30s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

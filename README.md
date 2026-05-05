@@ -10,10 +10,10 @@ Built with **Laravel 13**, **Vue 3**, **Inertia.js**, and **Tailwind CSS**.
 ## Features
 
 - Text-to-speech synthesis with selectable voice and playback speed
-- Long text support — automatically split into chunks and merged back
+- Long text support — automatically split into chunks and merged as MP3
 - File upload (`.txt`, `.docx`, `.pdf`) and URL-to-text extraction
 - Session-based audio history with progress tracking (no registration required)
-- Audio files automatically deleted after **30 days**; days remaining shown in history
+- Audio files automatically deleted after **7 days**; days remaining shown in history
 - Voice preview samples refreshed daily
 - Admin panel for monitoring jobs and managing audio files
 - Docker support for easy deployment
@@ -52,9 +52,14 @@ Copy-Item .env.example .env
 ```env
 APP_KEY=        # generate with: php artisan key:generate --show
 APP_URL=
+
+# MySQL credentials — must match docker-compose.yml
+DB_PASSWORD=your_strong_password
 ```
 
-Generate the key (requires PHP locally, or skip to step 4 and generate inside Docker):
+Also update the passwords in `docker-compose.yml` under the `mysql` service to match.
+
+Generate the app key (requires PHP locally, or skip to step 4 and generate inside Docker):
 
 ```bash
 php artisan key:generate --show
@@ -72,10 +77,11 @@ docker compose up --build -d
 ```
 
 On the **first run** the container automatically:
+- Waits for MySQL to be ready
 - Runs database migrations
 - Downloads and generates voice preview samples (~1–2 min)
 
-### 6. Create the admin user
+### 5. Create the admin user
 
 ```bash
 # Windows / macOS
@@ -97,9 +103,13 @@ On **Windows / macOS** use `docker-compose`, on **Linux** use `docker compose` (
 docker-compose up -d          # Windows / macOS
 docker compose up -d          # Linux
 
-# Stop
+# Stop (data is preserved)
 docker-compose down           # Windows / macOS
 docker compose down           # Linux
+
+# ⚠️  Stop AND delete all data (MySQL volume)
+docker-compose down -v        # Windows / macOS
+docker compose down -v        # Linux
 
 # View live logs
 docker-compose logs -f        # Windows / macOS
@@ -116,22 +126,42 @@ docker compose exec app bash  # Linux
 # Run artisan commands inside the container
 docker-compose exec app php artisan <command>  # Windows / macOS
 docker compose exec app php artisan <command>  # Linux
+
+# Access MySQL directly (use your DB_PASSWORD from .env)
+docker-compose exec mysql mysql -u tts -p tts  # Windows / macOS
+docker compose exec mysql mysql -u tts -p tts  # Linux
+```
+
+### Optional: phpMyAdmin
+
+Add this service to `docker-compose.yml` for a web-based database UI at `http://localhost:8081`:
+
+```yaml
+phpmyadmin:
+  image: phpmyadmin
+  ports:
+    - "8081:80"
+  environment:
+    PMA_HOST: mysql
+    PMA_USER: ${DB_USERNAME}
+    PMA_PASSWORD: ${DB_PASSWORD}
 ```
 
 ---
 
-## Running locally
+## Running locally (SQLite)
+
+For local development you can use SQLite — no MySQL or Docker needed.
 
 ### Requirements
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| PHP | 8.4+ | Extensions: `sqlite3`, `pdo_sqlite`, `zip`, `mbstring`, `xml`, `intl`, `curl`, `fileinfo` |
+| PHP | 8.4+ | Extensions: `pdo_sqlite`, `pdo_mysql`, `zip`, `mbstring`, `xml`, `intl`, `curl`, `fileinfo` |
 | Composer | 2.x | [getcomposer.org](https://getcomposer.org) |
 | Node.js | 20+ | [nodejs.org](https://nodejs.org) |
 | npm | 10+ | Comes with Node.js |
-
-> **No MySQL, Redis, or ffmpeg required.** Everything runs on SQLite and PHP.
+| ffmpeg | any | Required for MP3 encoding — [ffmpeg.org](https://ffmpeg.org/download.html) |
 
 ### 1. Clone the repository
 
@@ -157,13 +187,20 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-### 4. Generate the application key
+### 4. Switch to SQLite in `.env`
+
+```env
+DB_CONNECTION=sqlite
+# Comment out or remove the MySQL DB_* lines
+```
+
+### 5. Generate the application key
 
 ```bash
 php artisan key:generate
 ```
 
-### 5. Run database migrations
+### 6. Run database migrations
 
 ```bash
 php artisan migrate
@@ -171,13 +208,13 @@ php artisan migrate
 
 > Laravel automatically creates `database/database.sqlite` if it does not exist.
 
-### 6. Create the public storage symlink
+### 7. Create the public storage symlink
 
 ```bash
 php artisan storage:link
 ```
 
-### 7. Generate voice samples
+### 8. Generate voice samples
 
 Fetches all available voices from the TartuNLP API and generates a short audio preview for each.  
 **Requires an internet connection. Takes ~1–2 minutes.**
@@ -186,7 +223,7 @@ Fetches all available voices from the TartuNLP API and generates a short audio p
 php artisan voices:refresh
 ```
 
-### 8. Create an admin user
+### 9. Create an admin user
 
 ```bash
 php artisan admin:create --email=admin@example.com --name="Admin" --password="your-password"
@@ -194,7 +231,7 @@ php artisan admin:create --email=admin@example.com --name="Admin" --password="yo
 
 If the user already exists, they will be promoted to admin without changing their password.
 
-### 9. Start the development servers
+### 10. Start the development servers
 
 You need **three processes** running simultaneously. The easiest way:
 
@@ -222,7 +259,7 @@ Two tasks run daily via the Laravel Scheduler:
 | Time | Command | Description |
 |------|---------|-------------|
 | 03:00 | `voices:refresh` | Refresh voice list and preview samples |
-| 04:00 | `audio:cleanup` | Delete audio files and records older than 30 days |
+| 04:00 | `audio:cleanup` | Delete audio files and records older than 7 days |
 
 ### Linux / macOS — add one cron entry
 
@@ -251,11 +288,12 @@ php artisan audio:cleanup
 
 ## Audio file retention
 
-Generated audio files are automatically deleted **30 days** after creation.
+Generated audio files are automatically deleted **7 days** after creation.
 
 - The days remaining are shown in the user's history sidebar
 - The admin panel displays the expiry for each file
 - Deletion runs daily at 04:00 via the scheduler (or `php artisan audio:cleanup`)
+- The retention period can be changed in `app/Models/AudioFile.php` → `RETENTION_DAYS`
 
 ---
 
@@ -269,7 +307,12 @@ Key variables in `.env`:
 | `APP_URL` | `http://localhost` | Base URL — affects generated audio links |
 | `APP_ENV` | `local` | Set to `production` on a live server |
 | `APP_DEBUG` | `true` | Set to `false` in production |
-| `DB_CONNECTION` | `sqlite` | Database driver |
+| `DB_CONNECTION` | `mysql` | Database driver (`mysql` for Docker, `sqlite` for local dev) |
+| `DB_HOST` | `mysql` | MySQL host (service name in Docker) |
+| `DB_DATABASE` | `tts` | Database name |
+| `DB_USERNAME` | `tts` | Database user |
+| `DB_PASSWORD` | — | MySQL user password — **change in production** |
+| `MYSQL_ROOT_PASSWORD` | — | MySQL root password — **change in production** |
 | `QUEUE_CONNECTION` | `database` | Queue driver |
 | `CACHE_STORE` | `database` | Cache driver |
 | `SESSION_DRIVER` | `database` | Session driver |
@@ -293,14 +336,13 @@ app/
 ├── Jobs/
 │   └── SynthesizeLongTextJob.php
 ├── Models/
-│   ├── AudioFile.php             # RETENTION_DAYS = 30
+│   ├── AudioFile.php             # RETENTION_DAYS = 7
 │   ├── User.php
 │   └── VoiceSample.php
 └── Services/
     ├── TextExtractorService.php
     ├── TextSplitterService.php
-    ├── UrlTextExtractorService.php
-    └── WavMergerService.php
+    └── UrlTextExtractorService.php
 
 docker/
 ├── nginx.conf                    # Nginx web server config
@@ -314,7 +356,7 @@ resources/js/pages/
     └── Jobs.vue                  # Admin — active queue jobs
 
 storage/app/public/
-├── audio/                        # Generated user audio files (deleted after 30 days)
+├── audio/                        # Generated user audio files (deleted after 7 days)
 └── voice-samples/                # Voice preview samples (refreshed daily)
 ```
 
@@ -329,7 +371,7 @@ php artisan admin:create --email=admin@example.com --name="Admin" --password="yo
 # Refresh the voice list and regenerate preview samples
 php artisan voices:refresh
 
-# Delete audio files and records older than 30 days
+# Delete audio files and records older than 7 days
 php artisan audio:cleanup
 
 # Process queued jobs (runs until stopped with Ctrl+C)
