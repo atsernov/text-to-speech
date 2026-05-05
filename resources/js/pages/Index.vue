@@ -280,75 +280,14 @@ const jobQueuePosition = ref<number | null>(null);
 const audioUrl = ref<string | null>(null);
 const isPartial = ref(false);
 
-let pollingTimeout: ReturnType<typeof setTimeout> | null = null;
-let statusFailCount = 0;
 let currentJobId: string | null = null;
-const STATUS_MAX_RETRIES = 3;
 
+// Resets the main-panel job state. Called when the job finishes or is deleted.
 const stopPolling = () => {
-    if (pollingTimeout !== null) {
-        clearTimeout(pollingTimeout);
-        pollingTimeout = null;
-    }
-
-    statusFailCount = 0;
     currentJobId = null;
     jobCancellationRequested.value = false;
 };
 
-const pollStatus = async (jobId: string) => {
-    try {
-        const { data } = await axios.get(`/api/synthesis/status/${jobId}`);
-
-        // Successful response — reset the failure counter
-        statusFailCount = 0;
-
-        jobStatus.value = data.status;
-        jobProgress.value = data.progress ?? 0;
-        jobTotal.value = data.total ?? 0;
-        jobQueuePosition.value = data.queue_position ?? null;
-
-        if (data.status === 'done') {
-            audioUrl.value = data.audio_url;
-            isLoading.value = false;
-            stopPolling();
-            stopHistoryPolling(); // Stop independent history timer before reloading
-            await loadHistory();  // This result is now authoritative — no race
-
-            return;
-        }
-
-        if (data.status === 'failed') {
-            errorMessage.value = data.error ?? 'Sünteesimisel tekkis viga.';
-
-            if (data.audio_url) {
-                audioUrl.value = data.audio_url;
-                isPartial.value = true;
-            }
-
-            isLoading.value = false;
-            stopPolling();
-            stopHistoryPolling();
-            await loadHistory();
-
-            return;
-        }
-
-        const interval = data.status === 'pending' ? 3000 : 2000;
-        pollingTimeout = setTimeout(() => pollStatus(jobId), interval);
-    } catch {
-        statusFailCount++;
-
-        if (statusFailCount >= STATUS_MAX_RETRIES) {
-            errorMessage.value = 'Ülesande staatuse päring ebaõnnestus.';
-            isLoading.value = false;
-            stopPolling();
-        } else {
-            // Retry after a short delay — transient network hiccup
-            pollingTimeout = setTimeout(() => pollStatus(jobId), 4000);
-        }
-    }
-};
 
 const sendText = async () => {
     if (!inputText.value.trim()) {
@@ -373,8 +312,7 @@ const sendText = async () => {
             speed: speed.value,
         });
         currentJobId = data.job_id;
-        await loadHistory();
-        pollingTimeout = setTimeout(() => pollStatus(data.job_id), 2000);
+        await loadHistory(); // starts scheduleHistoryRefresh automatically
     } catch {
         errorMessage.value = 'Serveri ühendus ebaõnnestus.';
         isLoading.value = false;
@@ -450,6 +388,40 @@ const loadHistory = async () => {
     try {
         const { data } = await axios.get('/api/my-files');
         historyItems.value = data;
+
+        // Sync main panel state from the current active job's history entry.
+        // This replaces the separate pollStatus loop — one request covers everything.
+        if (currentJobId) {
+            const current = (data as HistoryItem[]).find((i) => i.job_id === currentJobId);
+
+            if (current) {
+                jobStatus.value = current.status;
+                jobProgress.value = current.progress;
+                jobTotal.value = current.total;
+                jobQueuePosition.value = current.queue_position;
+
+                if (current.status === 'done') {
+                    audioUrl.value = current.audio_url;
+                    isLoading.value = false;
+                    stopPolling();
+                } else if (current.status === 'failed') {
+                    errorMessage.value = current.error ?? 'Sünteesimisel tekkis viga.';
+
+                    if (current.audio_url && current.is_partial) {
+                        audioUrl.value = current.audio_url;
+                        isPartial.value = true;
+                    }
+
+                    isLoading.value = false;
+                    stopPolling();
+                }
+            } else {
+                // Job was deleted externally (e.g. by admin) — don't leave UI stuck
+                isLoading.value = false;
+                jobStatus.value = 'idle';
+                stopPolling();
+            }
+        }
 
         // Remove items from cancelRequestedItems once the worker has finished
         if (cancelRequestedItems.value.size > 0) {

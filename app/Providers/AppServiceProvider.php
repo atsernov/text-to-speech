@@ -40,15 +40,16 @@ class AppServiceProvider extends ServiceProvider
     protected function configureRateLimiting(): void
     {
         RateLimiter::for('heavy', function (Request $request) {
-            return Limit::perMinute(1)->by($request->ip());
-        });
-
-        RateLimiter::for('standard', function (Request $request) {
             return Limit::perMinute(3)->by($request->ip());
         });
 
+        RateLimiter::for('standard', function (Request $request) {
+            return Limit::perMinute(5)->by($request->ip());
+        });
+
         RateLimiter::for('light', function (Request $request) {
-            return Limit::perMinute(60)->by($request->ip());
+            $key = $request->cookie('tts_session_id') ?? $request->ip();
+            return Limit::perMinute(60)->by($key);
         });
     }
 
